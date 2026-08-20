@@ -100,8 +100,6 @@ body {
 .btn.secondary { background: transparent; color: var(--accent); border: 1px solid var(--accent); }
 .btn.ghost { background: transparent; color: var(--fg2); border: 1px solid var(--border); }
 .btn:disabled { opacity: 0.5; cursor: not-allowed; }
-.project-link { display: inline-block; margin-top: 22px; font-size: 12px; color: var(--fg2); text-decoration: none; cursor: pointer; }
-.project-link:hover { color: var(--accent); }
 .cookie-paste { margin-top: 26px; border-top: 1px dashed var(--border); padding-top: 16px; }
 .cookie-paste details summary { cursor: pointer; color: var(--fg2); font-size: 13px; text-align: left; }
 .cookie-paste textarea {
