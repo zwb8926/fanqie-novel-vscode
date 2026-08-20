@@ -508,7 +508,7 @@
     renderHistory(view);
   }
 
-  /* ---------------- 阅读历史 ---------------- */
+  /* ---------------- 历史记录 ---------------- */
   function mergeHistory(local, cloud) {
     var map = {};
     (cloud || []).forEach(function (c) {
@@ -557,10 +557,7 @@
 
   function renderHistory(view) {
     var sec = el('div', 'history-sec');
-    var head = el('div', 'section-title', '阅读历史');
-    var clear = el('button', 'btn ghost small', '清空本地');
-    clear.id = 'historyClearBtn';
-    head.appendChild(clear);
+    var head = el('div', 'section-title', '历史记录');
     sec.appendChild(head);
     if (state.loggedIn) sec.appendChild(el('div', 'history-hint', '已登录：自动合并云端阅读进度'));
     var box = el('div', 'history-list');
@@ -576,7 +573,7 @@
       var items = mergeHistory(rs[0] || [], rs[1] || []);
       box.innerHTML = '';
       if (!items.length) {
-        box.appendChild(el('div', 'empty', '暂无阅读历史，打开一本书开始记录'));
+        box.appendChild(el('div', 'empty', '暂无历史记录，打开一本书开始记录'));
         return;
       }
       items.forEach(function (h) {
@@ -1334,7 +1331,7 @@
       });
       return;
     }
-    // 阅读历史：点击条目续读
+    // 历史记录：点击条目续读
     var histItem = t.closest ? t.closest('.history-item') : null;
     if (histItem && state.view === 'login') {
       var hBookId = histItem.dataset.bookId;
@@ -1344,17 +1341,6 @@
       } else {
         enterReader(hBookId, '', hItemId);
       }
-      return;
-    }
-    var histClear = t.closest ? t.closest('#historyClearBtn') : null;
-    if (histClear) {
-      call('history-clear', {}).then(function () {
-        var box = $('#historyList');
-        if (box) {
-          box.innerHTML = '';
-          box.appendChild(el('div', 'empty', '暂无阅读历史，打开一本书开始记录'));
-        }
-      }).catch(function () { /* ignore */ });
       return;
     }
     // 书籍弹窗

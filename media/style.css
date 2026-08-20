@@ -115,9 +115,7 @@ body {
 
 /* ============ 阅读历史 ============ */
 .history-sec { max-width: 460px; margin: 26px auto 30px; text-align: left; }
-.history-sec .section-title { display: flex; align-items: center; justify-content: space-between; }
 .history-hint { font-size: 11px; color: var(--fg2); margin: -4px 2px 8px; }
-.btn.small { padding: 4px 12px; font-size: 12px; border-radius: 6px; }
 .history-list { display: flex; flex-direction: column; gap: 8px; }
 .history-item {
   display: flex; align-items: center; gap: 12px; padding: 10px;

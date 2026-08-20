@@ -275,13 +275,8 @@ async function handleMessage(webview: vscode.Webview, msg: any): Promise<void> {
       post(true);
       break;
     }
-    case 'history-clear': {
-      await setReadHistory([]);
-      post(true);
-      break;
-    }
     case 'history-cloud-get': {
-      // 云端阅读历史（基于阅读进度，需登录）；失败静默返回空，前端降级为本地
+      // 云端历史（基于阅读进度，需登录）；失败静默返回空，前端降级为本地
       let items: any[] = [];
       try {
         items = await api.getCloudReadHistory();
