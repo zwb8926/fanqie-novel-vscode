@@ -5,8 +5,7 @@
 import * as vscode from 'vscode';
 import * as api from '../api/fanqie';
 import { getChapterComments, getParagraphComments, BookComment } from '../api/fanqie';
-import { importCookiesLogin, logout, QrStatus, startQrLogin, pollQrLogin, finalizeLogin, QrTicket } from '../auth/qr';
-import { sendSmsCode, resendSmsCode, smsLogin, SmsError, SmsCaptchaError } from '../auth/sms';
+import { logout, QrStatus, startQrLogin, pollQrLogin, finalizeLogin, QrTicket } from '../auth/qr';
 import {
   getLocalShelf,
   setLocalShelf,
@@ -85,41 +84,6 @@ async function handleMessage(webview: vscode.Webview, msg: any): Promise<void> {
     case 'qr-cancel': {
       currentQr?.cancel();
       post(true);
-      break;
-    }
-    case 'cookie-import': {
-      const user = await importCookiesLogin(String(msg.cookie ?? ''));
-      post(true, { user, loggedIn: true });
-      broadcast({ type: 'login-changed', user, loggedIn: true });
-      break;
-    }
-    case 'sms-send': {
-      try {
-        const r = await sendSmsCode(String(msg.mobile ?? ''), String(msg.region ?? '86'));
-        post(true, r);
-      } catch (e) {
-        if (e instanceof SmsCaptchaError) {
-          post(true, { needCaptcha: true, verifyConf: e.verifyConf });
-        } else {
-          throw e;
-        }
-      }
-      break;
-    }
-    case 'sms-send-replay': {
-      const r = await resendSmsCode(String(msg.mobile ?? ''), String(msg.fp ?? ''), String(msg.region ?? '86'));
-      post(true, r);
-      break;
-    }
-    case 'sms-login': {
-      const user = await smsLogin(
-        String(msg.mobile ?? ''),
-        String(msg.code ?? ''),
-        String(msg.mobileTicket ?? ''),
-        String(msg.region ?? '86')
-      );
-      post(true, { user, loggedIn: true });
-      broadcast({ type: 'login-changed', user, loggedIn: true });
       break;
     }
     case 'logout': {

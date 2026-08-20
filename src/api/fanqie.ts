@@ -540,13 +540,22 @@ export async function getRankAllList(): Promise<RankResult> {
 }
 
 function normalizeRankBook(b: any): RankBook {
+  // readCount 与 read_count 都可能返回 "0"，取非零的那个
+  let readCount = '';
+  for (const v of [b.read_count, b.readCount]) {
+    const n = Number(v);
+    if (Number.isFinite(n) && n > 0) {
+      readCount = String(n);
+      break;
+    }
+  }
   return {
     bookId: String(b.bookId ?? b.book_id ?? ''),
     bookName: dec(b.bookName ?? b.book_name ?? ''),
     author: dec(b.author ?? ''),
     abstract: dec(b.abstract ?? ''),
     thumbUri: b.thumbUri ?? b.thumb_url ?? '',
-    readCount: String(b.readCount ?? b.read_count ?? ''),
+    readCount,
     currentPos: Number(b.currentPos ?? 0),
     rankPosDiff: Number(b.rankPosDiff ?? 0),
     lastChapterTitle: dec(b.lastChapterTitle ?? ''),

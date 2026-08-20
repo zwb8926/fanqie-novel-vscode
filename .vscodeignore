@@ -5,3 +5,5 @@ scripts/
 **/*.map
 **/*.ts
 research/
+.git-ssh/
+.git/**

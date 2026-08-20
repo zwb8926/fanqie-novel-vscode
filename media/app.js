@@ -85,14 +85,8 @@
     qrStatusText: '未登录',
     qrStatusClass: '',
     qrWorking: false,
-    // 手机号登录
-    sms: { tab: 'qr', mobile: '', code: '', ticket: '', countdown: 0, status: '', statusClass: '', loggingIn: false, captcha: { conf: null, mounted: false } },
   };
 
-  // 确保 sms.captcha 等新增字段存在（防止旧版本残留状态导致渲染崩溃）
-  if (!state.sms || !state.sms.captcha) {
-    state.sms = { tab: 'qr', mobile: '', code: '', ticket: '', countdown: 0, status: '', statusClass: '', loggingIn: false, captcha: { conf: null, mounted: false } };
-  }
 
   function saveState() {
     try { vscode.setState(state); } catch (e) { /* ignore */ }
@@ -296,7 +290,7 @@
       else img.style.background = 'linear-gradient(135deg,#ff6b3d,#ff3d2e)';
       var info = el('div', 'info');
       info.appendChild(el('div', 'title', b.bookName || '未知书名'));
-      info.appendChild(el('div', 'meta', (b.author || '') + (b.readCount ? ' · ' + fmtCount(b.readCount) + '人在读' : '')));
+      info.appendChild(el('div', 'meta', (b.author || '') + (Number(b.readCount) > 0 ? ' · ' + fmtCount(b.readCount) + '人在读' : '')));
       card.appendChild(img);
       card.appendChild(info);
       grid.appendChild(card);
@@ -506,80 +500,9 @@
       logout.id = 'logoutBtn';
       wrap.appendChild(logout);
     } else {
-      // 方式切换：扫码（默认）/ 手机号
-      var tabs = el('div', 'chips');
-      var qrTab = el('button', 'chip' + (state.sms.tab === 'qr' ? ' active' : ''), '扫码登录');
-      qrTab.id = 'qrTabBtn';
-      var smsTab = el('button', 'chip' + (state.sms.tab === 'sms' ? ' active' : ''), '手机号登录');
-      smsTab.id = 'smsTabBtn';
-      tabs.appendChild(qrTab);
-      tabs.appendChild(smsTab);
-      wrap.appendChild(tabs);
-
-      if (state.sms.tab === 'sms') {
-        wrap.appendChild(renderSmsLogin());
-      } else {
-        wrap.appendChild(renderQrLogin());
-      }
+      wrap.appendChild(renderQrLogin());
     }
     view.appendChild(wrap);
-  }
-
-  /* ---------------- 手机号登录 ---------------- */
-  function renderSmsLogin() {
-    var box = el('div');
-    var sub = el('div', 'sub', '使用手机号 + 验证码登录（走官网同源接口，受风控影响小）');
-    box.appendChild(sub);
-    // 手机号
-    var phoneRow = el('div', 'search-bar');
-    var region = el('span', 'tag', '+86');
-    var phone = el('input');
-    phone.id = 'smsMobile';
-    phone.type = 'tel';
-    phone.maxLength = '11';
-    phone.placeholder = '请输入 11 位手机号';
-    phone.value = state.sms.mobile;
-    phoneRow.appendChild(region);
-    phoneRow.appendChild(phone);
-    box.appendChild(phoneRow);
-    // 验证码
-    var codeRow = el('div', 'search-bar');
-    var code = el('input');
-    code.id = 'smsCode';
-    code.type = 'text';
-    code.maxLength = '8';
-    code.placeholder = '请输入短信验证码';
-    code.value = state.sms.code;
-    codeRow.appendChild(code);
-    var sendBtn = el('button', 'btn secondary', state.sms.countdown > 0 ? state.sms.countdown + 's 后重发' : '发送验证码');
-    sendBtn.id = 'smsSendBtn';
-    if (state.sms.countdown > 0) sendBtn.disabled = true;
-    codeRow.appendChild(sendBtn);
-    box.appendChild(codeRow);
-    // 登录
-    var loginBtn = el('button', 'btn', state.sms.loggingIn ? '登录中…' : '登 录');
-    loginBtn.id = 'smsLoginBtn';
-    if (state.sms.loggingIn) loginBtn.disabled = true;
-    box.appendChild(loginBtn);
-    // 状态
-    var status = el('div', 'qr-status' + (state.sms.statusClass ? ' ' + state.sms.statusClass : ''), state.sms.status || '');
-    status.id = 'smsStatus';
-    box.appendChild(status);
-    // 滑块验证容器（服务端要求验证时挂载）
-    if (state.sms.captcha.conf) {
-      var capBox = el('div', 'captcha-wrap');
-      capBox.id = 'captchaBox';
-      capBox.appendChild(el('div', 'captcha-title', '该手机号需要安全验证，请完成下方滑块：'));
-      var capInner = el('div');
-      capInner.id = 'captcha_container';
-      capBox.appendChild(capInner);
-      box.appendChild(capBox);
-      state.sms.captcha.mounted = false;
-      setTimeout(function () { mountCaptcha(); }, 80);
-    }
-    var hint = el('div', 'cookie-hint', '未收到验证码？请确认手机号正确；若提示需要图形验证码，说明该号码需安全验证，可改用扫码或粘贴 Cookie 登录。');
-    box.appendChild(hint);
-    return box;
   }
 
   /* ---------------- 扫码登录 ---------------- */
@@ -613,186 +536,8 @@
     actions.appendChild(startBtn);
     actions.appendChild(refreshBtn);
     box.appendChild(actions);
-    // Cookie 导入兜底
-    var paste = el('div', 'cookie-paste');
-    var details = el('details');
-    var sum = el('summary', null, '手动登录：粘贴浏览器 Cookie（备用方案）');
-    details.appendChild(sum);
-    var ta = el('textarea');
-    ta.id = 'cookieInput';
-    ta.placeholder = '在浏览器登录 fanqienovel.com 后，复制 Cookie 粘贴到这里';
-    var hint = el('div', 'cookie-hint',
-      '操作步骤：① 浏览器打开 fanqienovel.com 并登录；② F12 → 网络/应用 中复制 Cookie；③ 粘贴到上方并点击「导入」。');
-    var imp = el('button', 'btn secondary', '导入 Cookie 登录');
-    imp.id = 'cookieImport';
-    details.appendChild(ta);
-    details.appendChild(hint);
-    details.appendChild(imp);
-    paste.appendChild(details);
     box.appendChild(paste);
     return box;
-  }
-
-  function sendSms() {
-    var mobile = state.sms.mobile.trim();
-    if (!/^1[3-9]\d{9}$/.test(mobile)) {
-      state.sms.status = '请输入正确的 11 位手机号';
-      state.sms.statusClass = 'err';
-      rerenderLogin();
-      return;
-    }
-    state.sms.status = '正在发送验证码…';
-    state.sms.statusClass = '';
-    var btn = $('#smsSendBtn');
-    if (btn) { btn.disabled = true; btn.textContent = '发送中…'; }
-    call('sms-send', { mobile: mobile }).then(function (r) {
-      if (r && r.needCaptcha) {
-        // 需要滑块验证：挂载官方验证中心
-        state.sms.captcha.conf = r.verifyConf || {};
-        state.sms.status = '需要安全验证';
-        state.sms.statusClass = '';
-        var b = $('#smsSendBtn');
-        if (b) { b.disabled = false; b.textContent = '发送验证码'; }
-        rerenderLogin();
-        return;
-      }
-      state.sms.ticket = r.mobileTicket || '';
-      state.sms.status = '验证码已发送，请查收短信';
-      state.sms.statusClass = 'ok';
-      state.sms.countdown = 60;
-      startSmsCountdown();
-      rerenderLogin();
-    }).catch(function (e) {
-      state.sms.status = e.message;
-      state.sms.statusClass = 'err';
-      var b = $('#smsSendBtn');
-      if (b) { b.disabled = false; b.textContent = '发送验证码'; }
-      rerenderLogin();
-    });
-  }
-
-  /* ---------------- 滑块验证（官方验证中心） ---------------- */
-  function loadScript(url, onload, onerror) {
-    var s = document.createElement('script');
-    s.src = url;
-    s.onload = onload;
-    s.onerror = onerror;
-    document.head.appendChild(s);
-  }
-
-  function mountCaptcha() {
-    if (!state.sms.captcha || !state.sms.captcha.conf || state.sms.captcha.mounted) return;
-    if (!$('#captcha_container')) return;
-    state.sms.captcha.mounted = true;
-    var statusEl = $('#smsStatus');
-    if (statusEl) { statusEl.textContent = '正在加载滑块验证…'; statusEl.className = 'qr-status'; }
-    var CDN = 'https://lf-rc1.yhgfb-cn-static.com/obj/rc-client-security/secsdk-captcha/@latest/captcha.js';
-    loadScript(CDN, function () {
-      try {
-        var api = window.renderCaptcha ||
-          (window.verifyCenter && window.verifyCenter.renderCaptcha) ||
-          (window.verifySDK && window.verifySDK.renderCaptcha);
-        if (typeof api !== 'function') throw new Error('验证组件不可用');
-        api({
-          aid: 2503,
-          ele: 'captcha_container',
-          verify_data: state.sms.captcha.conf,
-          captchaOptions: {
-            successCb: function () {
-              var fp = '';
-              try { fp = window.getCaptchaWebId ? window.getCaptchaWebId() : ''; } catch (e) { }
-              if (!fp) {
-                try { fp = window.verifySDK && window.verifySDK.getCaptchaWebId ? window.verifySDK.getCaptchaWebId() : ''; } catch (e) { }
-              }
-              if (!fp && state.sms.captcha.conf.fp) fp = state.sms.captcha.conf.fp;
-              if (!fp) { fp = 'verify_' + Date.now(); }
-              replaySms(fp);
-            },
-            closeCb: function () {
-              state.sms.captcha.conf = null;
-              state.sms.status = '已取消滑块验证';
-              state.sms.statusClass = 'err';
-              rerenderLogin();
-            }
-          }
-        });
-        var se = $('#smsStatus');
-        if (se) { se.textContent = '请完成滑块验证'; se.className = 'qr-status'; }
-      } catch (e) {
-        state.sms.captcha.conf = null;
-        state.sms.status = '滑块验证组件加载失败：' + e.message;
-        state.sms.statusClass = 'err';
-        rerenderLogin();
-      }
-    }, function () {
-      state.sms.captcha.conf = null;
-      state.sms.status = '滑块验证组件加载失败，请稍后重试或改用扫码/粘贴 Cookie 登录';
-      state.sms.statusClass = 'err';
-      rerenderLogin();
-    });
-  }
-
-  function replaySms(fp) {
-    var statusEl = $('#smsStatus');
-    if (statusEl) { statusEl.textContent = '验证通过，正在发送验证码…'; statusEl.className = 'qr-status'; }
-    call('sms-send-replay', { mobile: state.sms.mobile, fp: fp }).then(function (r) {
-      state.sms.ticket = r.mobileTicket || '';
-      state.sms.captcha.conf = null;
-      state.sms.status = '验证码已发送，请查收短信';
-      state.sms.statusClass = 'ok';
-      state.sms.countdown = 60;
-      startSmsCountdown();
-      rerenderLogin();
-    }).catch(function (e) {
-      state.sms.captcha.conf = null;
-      state.sms.status = e.message;
-      state.sms.statusClass = 'err';
-      rerenderLogin();
-    });
-  }
-
-  var smsTimer = null;
-  function startSmsCountdown() {
-    if (smsTimer) clearInterval(smsTimer);
-    smsTimer = setInterval(function () {
-      if (state.sms.countdown > 0) {
-        state.sms.countdown--;
-        var b = $('#smsSendBtn');
-        if (b) {
-          if (state.sms.countdown > 0) { b.textContent = state.sms.countdown + 's 后重发'; b.disabled = true; }
-          else { b.textContent = '发送验证码'; b.disabled = false; }
-        }
-        if (state.sms.countdown <= 0) clearInterval(smsTimer);
-      } else {
-        clearInterval(smsTimer);
-      }
-    }, 1000);
-  }
-
-  function smsLoginSubmit() {
-    var mobile = state.sms.mobile.trim();
-    var code = state.sms.code.trim();
-    if (!/^1[3-9]\d{9}$/.test(mobile)) { state.sms.status = '请输入正确的 11 位手机号'; state.sms.statusClass = 'err'; rerenderLogin(); return; }
-    if (!code) { state.sms.status = '请输入验证码'; state.sms.statusClass = 'err'; rerenderLogin(); return; }
-    state.sms.loggingIn = true;
-    state.sms.status = '登录中…';
-    state.sms.statusClass = '';
-    rerenderLogin();
-    call('sms-login', { mobile: mobile, code: code, mobileTicket: state.sms.ticket }).then(function (r) {
-      state.user = r.user;
-      state.loggedIn = true;
-      state.sms.loggingIn = false;
-      state.sms.status = '登录成功：' + r.user.name;
-      state.sms.statusClass = 'ok';
-      state.sms.ticket = '';
-      state.sms.code = '';
-      rerenderLogin();
-    }).catch(function (e) {
-      state.sms.loggingIn = false;
-      state.sms.status = e.message;
-      state.sms.statusClass = 'err';
-      rerenderLogin();
-    });
   }
 
   function renderQrText(box, text) {
@@ -1396,7 +1141,7 @@
     });
     row3.appendChild(sw);
     pop.appendChild(row3);
-    var hint = el('div', 'cookie-hint', '键盘：←/→ 翻页 · Ctrl+←/→ 切换章节 · 点击段落实行可查看段评');
+    var hint = el('div', 'key-hint', '键盘：←/→ 翻页 · Ctrl+←/→ 切换章节 · 点击段落实行可查看段评');
     pop.appendChild(hint);
     root.appendChild(pop);
   }
@@ -1420,7 +1165,8 @@
         return;
       }
       state.view = target;
-      renderView();
+      // 用 render() 全量重建（含 navbar），保证选中状态同步切换
+      render();
       if (target === 'shelf') renderShelf($('#view'));
       if (target === 'bookstore' && !state.rankBooks.length && !state.rankLoading) loadRank(true);
       return;
@@ -1576,33 +1322,9 @@
     }
 
     // 登录
-    if (t.id === 'smsTabBtn') { state.sms.tab = 'sms'; renderView(); return; }
-    if (t.id === 'qrTabBtn') { state.sms.tab = 'qr'; renderView(); return; }
-    if (t.id === 'smsSendBtn') { sendSms(); return; }
-    if (t.id === 'smsLoginBtn') { smsLoginSubmit(); return; }
     if (t.id === 'qrStart') { startQr(); return; }
     if (t.id === 'qrRefresh') { startQr(); return; }
-    if (t.id === 'cookieImport') {
-      var val = $('#cookieInput') ? $('#cookieInput').value.trim() : '';
-      if (!val) return;
-      var btn = t;
-      btn.disabled = true;
-      btn.textContent = '导入中…';
-      call('cookie-import', { cookie: val }).then(function (r) {
-        state.user = r.user;
-        state.loggedIn = true;
-        state.qrStatusText = '登录成功：' + r.user.name;
-        state.qrStatusClass = 'ok';
-        render();
-      }).catch(function (e) {
-        btn.disabled = false;
-        btn.textContent = '导入 Cookie 登录';
-        state.qrStatusText = e.message;
-        state.qrStatusClass = 'err';
-        rerenderLogin();
-      });
-      return;
-    }
+    // 登录
     if (t.id === 'logoutBtn') {
       call('logout', {}).then(function () {
         state.user = null;
@@ -1629,8 +1351,6 @@
   // 设置控件 & 登录输入
   document.addEventListener('input', function (ev) {
     var t = ev.target;
-    if (t.id === 'smsMobile') state.sms.mobile = t.value;
-    if (t.id === 'smsCode') state.sms.code = t.value;
     if (t.id === 'fontSizeRange') {
       state.settings.fontSize = Number(t.value);
       saveSettings();
