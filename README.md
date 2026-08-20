@@ -2,6 +2,8 @@
 
 在 VS Code 里直接阅读[番茄小说](https://fanqienovel.com/)：抖音扫码登录、书城（排行榜/分类）、搜索、书架、阅读器（上下翻页/字号主题）、章评/段评。
 
+🌐 项目地址  https://github.com/zwb8926/fanqie-novel-vscode
+
 
 ## 📖 使用说明
 
