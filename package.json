@@ -68,6 +68,11 @@
         "command": "fanqie.openBook",
         "title": "番茄小说：按书籍 ID 打开",
         "icon": "$(link)"
+      },
+      {
+        "command": "fanqie.debugHistory",
+        "title": "番茄小说：历史记录诊断",
+        "icon": "$(bug)"
       }
     ],
     "keybindings": [
@@ -93,6 +98,10 @@
         },
         {
           "command": "fanqie.openBook",
+          "when": "true"
+        },
+        {
+          "command": "fanqie.debugHistory",
           "when": "true"
         }
       ]
