@@ -290,7 +290,7 @@
       else img.style.background = 'linear-gradient(135deg,#ff6b3d,#ff3d2e)';
       var info = el('div', 'info');
       info.appendChild(el('div', 'title', b.bookName || '未知书名'));
-      info.appendChild(el('div', 'meta', (b.author || '') + (b.readCount ? ' · ' + fmtCount(b.readCount) + '人在读' : '')));
+      info.appendChild(el('div', 'meta', (b.author || '') + (Number(b.readCount) > 0 ? ' · ' + fmtCount(b.readCount) + '人在读' : '')));
       card.appendChild(img);
       card.appendChild(info);
       grid.appendChild(card);
@@ -1165,7 +1165,8 @@
         return;
       }
       state.view = target;
-      renderView();
+      // 用 render() 全量重建（含 navbar），保证选中状态同步切换
+      render();
       if (target === 'shelf') renderShelf($('#view'));
       if (target === 'bookstore' && !state.rankBooks.length && !state.rankLoading) loadRank(true);
       return;
