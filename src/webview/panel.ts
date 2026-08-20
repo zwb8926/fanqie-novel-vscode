@@ -35,7 +35,7 @@ export function disposePanel(): void {
   panel = undefined;
 }
 
-/** 面板/侧边栏就绪后，让前端打开指定书籍（mode: modal=详情弹窗，reader=直接进入阅读器） */
-export function openBookInPanel(bookId: string, mode: 'modal' | 'reader' = 'modal'): void {
-  broadcast({ type: mode === 'reader' ? 'open-book-reader' : 'open-book', bookId });
+/** 面板/侧边栏就绪后，让前端打开指定书籍（mode: modal=详情弹窗，reader=直接进入阅读器，itemId=续读章节） */
+export function openBookInPanel(bookId: string, mode: 'modal' | 'reader' = 'modal', itemId?: string): void {
+  broadcast({ type: mode === 'reader' ? 'open-book-reader' : 'open-book', bookId, itemId });
 }

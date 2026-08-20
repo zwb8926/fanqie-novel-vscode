@@ -12,9 +12,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   await loadPersisted();
 
   // 侧边栏请求打开书籍时，转到编辑器标签页（面板）
-  setOpenBookInEditorHandler((bookId, mode) => {
+  setOpenBookInEditorHandler((bookId, mode, itemId) => {
     openPanel(context);
-    setTimeout(() => openBookInPanel(bookId, mode), 350);
+    setTimeout(() => openBookInPanel(bookId, mode, itemId), 350);
   });
 
   // 侧边栏（活动栏入口）

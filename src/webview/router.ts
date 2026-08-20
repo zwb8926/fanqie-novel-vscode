@@ -14,6 +14,9 @@ import {
   getReaderSettings,
   setReaderSettings,
   ReaderSettings,
+  getReadHistory,
+  setReadHistory,
+  HistoryItem,
 } from '../net/store';
 import { HttpError } from '../net/http';
 import { getUserInfo } from '../api/fanqie';
@@ -28,10 +31,12 @@ let qrSessionSeq = 0;
 const liveWebviews = new Set<vscode.Webview>();
 
 /** 由扩展入口注册：把书籍打开到编辑器标签页（面板） */
-let openBookInEditorHandler: ((bookId: string, mode: 'modal' | 'reader') => void) | undefined;
+let openBookInEditorHandler:
+  | ((bookId: string, mode: 'modal' | 'reader', itemId?: string) => void)
+  | undefined;
 
 export function setOpenBookInEditorHandler(
-  fn: (bookId: string, mode: 'modal' | 'reader') => void
+  fn: (bookId: string, mode: 'modal' | 'reader', itemId?: string) => void
 ): void {
   openBookInEditorHandler = fn;
 }
@@ -245,6 +250,32 @@ async function handleMessage(webview: vscode.Webview, msg: any): Promise<void> {
       break;
     }
 
+    /* ------------------------------ 历史记录（本地） ------------------------------ */
+    case 'history-get': {
+      post(true, await getReadHistory());
+      break;
+    }
+    case 'history-record': {
+      const bookId = String(msg.bookId ?? '');
+      if (bookId) {
+        const entry: HistoryItem = {
+          bookId,
+          title: String(msg.title ?? ''),
+          author: String(msg.author ?? ''),
+          coverUrl: String(msg.coverUrl ?? ''),
+          itemId: String(msg.itemId ?? ''),
+          chapterTitle: String(msg.chapterTitle ?? ''),
+          order: Number(msg.order ?? 0),
+          readAt: Date.now(),
+        };
+        const rest = (await getReadHistory()).filter(i => i.bookId !== bookId);
+        rest.unshift(entry);
+        await setReadHistory(rest.slice(0, 100));
+      }
+      post(true);
+      break;
+    }
+
     /* ------------------------------ 设置 ------------------------------ */
     case 'settings-get': {
       post(true, getReaderSettings());
@@ -263,8 +294,12 @@ async function handleMessage(webview: vscode.Webview, msg: any): Promise<void> {
       break;
     }
     case 'open-editor-book': {
-      // 侧边栏请求：在编辑器标签页中打开书籍阅读器
-      openBookInEditorHandler?.(String(msg.bookId ?? ''), msg.mode === 'modal' ? 'modal' : 'reader');
+      // 侧边栏请求：在编辑器标签页中打开书籍阅读器（可携带 itemId 续读历史章节）
+      openBookInEditorHandler?.(
+        String(msg.bookId ?? ''),
+        msg.mode === 'modal' ? 'modal' : 'reader',
+        msg.itemId ? String(msg.itemId) : undefined
+      );
       post(true);
       break;
     }

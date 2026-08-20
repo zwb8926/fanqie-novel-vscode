@@ -1,8 +1,8 @@
 {
   "name": "fanqie-novel",
   "displayName": "番茄小说",
-  "description": "🍅 番茄小说阅读器\n在 VS Code 里直接阅读番茄小说：抖音扫码登录、书城（排行榜/分类）、搜索、书架、阅读器（上下翻页/字号主题）、章评/段评。",
-  "version": "1.2.0",
+  "description": "🍅 番茄小说阅读器：在 VS Code 里直接阅读番茄小说：抖音扫码登录、书城（排行榜/分类）、搜索、书架、阅读器（上下翻页/字号主题）、章评/段评。",
+  "version": "1.2.1",
   "publisher": "zwb8926",
   "license": "MIT",
   "icon": "media/icon.png",
@@ -23,9 +23,9 @@
     "番茄小说",
     "reader",
     "reading",
-	"小说",
-	"book",
-	"reader"
+    "小说",
+    "book",
+    "reader"
   ],
   "activationEvents": [],
   "main": "./out/extension.js",
@@ -102,7 +102,7 @@
     "vscode:prepublish": "npm run compile",
     "compile": "tsc -p ./",
     "watch": "tsc -watch -p ./",
-    "prepackage": "node scripts/check-version.mjs",
+    "prepackage": "node scripts/check-version.mjs && node scripts/clean-vsix.mjs",
     "package": "vsce package --no-dependencies --allow-missing-repository"
   },
   "devDependencies": {
