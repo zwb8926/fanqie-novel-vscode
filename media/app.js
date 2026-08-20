@@ -536,7 +536,6 @@
     actions.appendChild(startBtn);
     actions.appendChild(refreshBtn);
     box.appendChild(actions);
-    box.appendChild(paste);
     return box;
   }
 
