@@ -508,23 +508,19 @@
     renderHistory(view);
   }
 
-  /* ---------------- 历史记录（云端） ---------------- */
+  /* ---------------- 历史记录（本地） ---------------- */
   function renderHistory(view) {
     var sec = el('div', 'history-sec');
     sec.appendChild(el('div', 'section-title', '历史记录'));
     var box = el('div', 'history-list');
     box.id = 'historyList';
+    box.appendChild(el('div', 'loading', '加载中…'));
     sec.appendChild(box);
     view.appendChild(sec);
-    if (!state.loggedIn) {
-      box.appendChild(el('div', 'empty', '登录后可查看云端历史记录'));
-      return;
-    }
-    box.appendChild(el('div', 'loading', '加载中…'));
     call('history-get', {}).then(function (items) {
       box.innerHTML = '';
       if (!items || !items.length) {
-        box.appendChild(el('div', 'empty', '暂无历史记录，读几章后再来看看'));
+        box.appendChild(el('div', 'empty', '暂无历史记录，打开一本书开始记录'));
         return;
       }
       items.forEach(function (h) {
@@ -787,6 +783,16 @@
     if (idx >= 0) state.shelfLocal[idx] = item;
     else state.shelfLocal.unshift(item);
     call('shelf-local-set', { items: state.shelfLocal }).catch(function () { /* ignore */ });
+    // 记录历史（本地，无需登录）
+    call('history-record', {
+      bookId: state.readerBookId,
+      title: state.readerBookTitle || c.bookName || state.readerBookId,
+      author: c.author || '',
+      coverUrl: cover,
+      itemId: c.itemId,
+      chapterTitle: c.title,
+      order: Number(c.realChapterOrder || c.order || 0),
+    }).catch(function () { /* ignore */ });
     if (state.loggedIn) {
       call('progress-update', {
         bookId: state.readerBookId,

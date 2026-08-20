@@ -14,6 +14,9 @@ import {
   getReaderSettings,
   setReaderSettings,
   ReaderSettings,
+  getReadHistory,
+  setReadHistory,
+  HistoryItem,
 } from '../net/store';
 import { HttpError } from '../net/http';
 import { getUserInfo } from '../api/fanqie';
@@ -247,16 +250,29 @@ async function handleMessage(webview: vscode.Webview, msg: any): Promise<void> {
       break;
     }
 
-    /* ------------------------------ 历史记录（云端） ------------------------------ */
+    /* ------------------------------ 历史记录（本地） ------------------------------ */
     case 'history-get': {
-      // 云端历史（基于阅读进度，需登录）；失败静默返回空
-      let items: any[] = [];
-      try {
-        items = await api.getCloudReadHistory();
-      } catch {
-        items = [];
+      post(true, await getReadHistory());
+      break;
+    }
+    case 'history-record': {
+      const bookId = String(msg.bookId ?? '');
+      if (bookId) {
+        const entry: HistoryItem = {
+          bookId,
+          title: String(msg.title ?? ''),
+          author: String(msg.author ?? ''),
+          coverUrl: String(msg.coverUrl ?? ''),
+          itemId: String(msg.itemId ?? ''),
+          chapterTitle: String(msg.chapterTitle ?? ''),
+          order: Number(msg.order ?? 0),
+          readAt: Date.now(),
+        };
+        const rest = (await getReadHistory()).filter(i => i.bookId !== bookId);
+        rest.unshift(entry);
+        await setReadHistory(rest.slice(0, 100));
       }
-      post(true, items);
+      post(true);
       break;
     }
 
