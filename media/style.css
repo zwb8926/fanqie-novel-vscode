@@ -107,11 +107,7 @@ body {
   border-radius: 8px; padding: 8px; font-size: 12px; background: var(--bg2); color: var(--fg);
   resize: vertical;
 }
-.cookie-hint { text-align: left; font-size: 12px; color: var(--fg2); margin-top: 6px; line-height: 1.6; }
-.captcha-wrap { margin: 12px 0; padding: 12px; border: 1px dashed var(--border); border-radius: var(--radius); background: var(--bg2); }
-.captcha-title { font-size: 13px; color: var(--fg2); margin-bottom: 8px; text-align: left; }
-#captcha_container { display: flex; justify-content: center; }
-#captcha_container iframe { border: none; }
+.cookie-hint, .key-hint { text-align: left; font-size: 12px; color: var(--fg2); margin-top: 6px; line-height: 1.6; }
 .user-card { display: flex; align-items: center; gap: 12px; margin: 20px auto; max-width: 400px; padding: 16px; background: var(--bg2); border-radius: var(--radius); }
 .user-card img { width: 48px; height: 48px; border-radius: 50%; }
 .user-card .name { font-weight: 600; }

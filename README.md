@@ -6,7 +6,7 @@
 
 | 功能 | 说明 |
 | --- | --- |
-| 🔑 扫码登录 | 抖音 / 番茄 App 扫码，多策略自动回退；另有「粘贴 Cookie」备用登录 |
+| 🔑 扫码登录 | 抖音 / 番茄 App 扫码登录（官网同源接口，稳定可用） |
 | 📚 书城 | 男频/女频 + 推荐/热读/新书/完结/更新榜单 + 37 个分类 |
 | 🔍 搜索 | 按书名/作者搜索，分页加载 |
 | 📖 书架 | 本地书架（离线可用）+ 登录后云端书架同步 |
@@ -47,19 +47,6 @@ npm run package        # 生成 fanqie-novel-<版本>.vsix（如 1.0.0）
 3. 登录成功后即可同步云端书架与阅读进度。
 
 > 扫码登录走番茄官网**同源 passport** 接口（`/passport/web/get_qrcode/` + `check_qrconnect/`），不经过 sso.douyin.com，不受其风控影响（实测有效）。
-> 若扫码不可用，可切换到「手机号登录」（官网同源验证码接口）或「粘贴 Cookie」。
-
-#### 备选：手机号登录
-
-1. 登录页切到「手机号登录」；
-2. 输入 11 位手机号 → 发送验证码 → 输入验证码登录。
-> 若提示「需要滑块验证」，扩展会**内嵌官方滑块**：直接在登录页拖动滑块完成验证后自动继续发送验证码。
-
-#### 兜底：粘贴 Cookie
-
-> ① 浏览器打开 [fanqienovel.com](https://fanqienovel.com) 并登录；
-> ② F12 → 网络（Network）→ 任意请求 → 请求头里复制 `Cookie`；
-> ③ 回到扩展的登录页 → 「手动登录：粘贴浏览器 Cookie」→ 粘贴 → 导入。
 
 ### 阅读
 
@@ -86,28 +73,6 @@ npm run package        # 生成 fanqie-novel-<版本>.vsix（如 1.0.0）
 - 章评/段评依赖 App 接口，**不同网络环境可达性不同**；不可用时请直接使用番茄 App；
 - 付费章节（`needPay`）需登录并在官方平台购买后方可阅读；
 - 本项目仅用于个人学习研究，请遵守番茄小说服务条款，勿用于批量抓取。
-
-## 📁 项目结构
-
-```
-src/
-  extension.ts          # 扩展入口：命令注册、状态栏
-  net/http.ts           # HTTP 客户端 + Cookie Jar
-  net/store.ts          # SecretStorage / globalState 持久化
-  api/constants.ts      # 接口常量
-  api/fanqie.ts         # Web API 封装（搜索/目录/章节/排行/书架/书评）
-  api/ssr.ts            # SSR 页面解析（__INITIAL_STATE__）
-  api/font.ts           # PUA 字体解密（WOFF2/CFF 解析 + 字符表）
-  api/fontmap.json      # 字体字符映射表
-  auth/qr.ts            # 抖音扫码登录（多策略）
-  webview/panel.ts      # Webview 面板与消息路由
-  webview/html.ts       # Webview HTML（CSP）
-media/
-  app.js                # 前端 SPA（登录/书城/搜索/书架/阅读器/评论）
-  style.css             # 样式与主题
-  vendor/qrcode.js      # 二维码渲染库（MIT）
-scripts/                # 研究/冒烟测试脚本（不打入扩展包）
-```
 
 ## 🙏 致谢
 

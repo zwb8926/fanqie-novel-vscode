@@ -204,20 +204,6 @@ export async function qrLogin(onStatus: QrStatusCallback): Promise<UserInfo> {
   return finalizeLogin(redirectUrl, onStatus);
 }
 
-/** 粘贴 Cookie 登录（手动兜底） */
-export async function importCookiesLogin(cookieString: string): Promise<UserInfo> {
-  const cleaned = cookieString.trim();
-  if (!cleaned) throw new HttpError('Cookie 为空', 0, '', '');
-  jar.importCookies(cleaned, 'https://fanqienovel.com/');
-  const user = await getUserInfo();
-  if (!user) {
-    throw new HttpError('Cookie 无效或已过期（请重新登录 fanqienovel.com 后复制 Cookie）', 0, '', '');
-  }
-  await saveCookies();
-  await setUser(user);
-  return user;
-}
-
 /** 登出 */
 export async function logout(): Promise<void> {
   jar.clear();
