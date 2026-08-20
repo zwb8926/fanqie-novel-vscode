@@ -502,6 +502,11 @@
     } else {
       wrap.appendChild(renderQrLogin());
     }
+    // 项目主页链接（本地安装详情页不显示 Repository，这里提供官网入口）
+    var home = el('a', 'project-link', '🌐 项目主页：github.com/zwb8926/fanqie-novel-vscode');
+    home.href = '#';
+    home.dataset.openUrl = 'https://github.com/zwb8926/fanqie-novel-vscode';
+    wrap.appendChild(home);
     view.appendChild(wrap);
   }
 
@@ -1324,6 +1329,12 @@
     // 登录
     if (t.id === 'qrStart') { startQr(); return; }
     if (t.id === 'qrRefresh') { startQr(); return; }
+    // 登录
+    var openUrl = t.closest ? t.closest('[data-openUrl]') : null;
+    if (openUrl) {
+      call('open-external', { url: openUrl.dataset.openUrl }).catch(function () { /* ignore */ });
+      return;
+    }
     if (t.id === 'logoutBtn') {
       call('logout', {}).then(function () {
         state.user = null;
