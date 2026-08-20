@@ -9,6 +9,7 @@ const USER_KEY = 'fanqie.user.v1';
 const DEVICE_KEY = 'fanqie.device.v1';
 const SHELF_KEY = 'fanqie.localShelf.v1';
 const SETTINGS_KEY = 'fanqie.readerSettings.v1';
+const HISTORY_KEY = 'fanqie.readHistory.v1';
 
 export interface UserInfo {
   id: string;
@@ -120,4 +121,25 @@ export function getReaderSettings(): ReaderSettings {
 
 export async function setReaderSettings(s: ReaderSettings): Promise<void> {
   if (globalState) await globalState.update(SETTINGS_KEY, s);
+}
+
+/** 阅读历史条目：按书去重，最近阅读的排在最前（本地记录，无需登录） */
+export interface HistoryItem {
+  bookId: string;
+  title: string;
+  author: string;
+  coverUrl: string;
+  /** 最近读到的章节 */
+  itemId: string;
+  chapterTitle: string;
+  order: number;
+  readAt: number;
+}
+
+export async function getReadHistory(): Promise<HistoryItem[]> {
+  return globalState ? (globalState.get<HistoryItem[]>(HISTORY_KEY) ?? []) : [];
+}
+
+export async function setReadHistory(items: HistoryItem[]): Promise<void> {
+  if (globalState) await globalState.update(HISTORY_KEY, items);
 }

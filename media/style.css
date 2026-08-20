@@ -113,6 +113,24 @@ body {
 .user-card .name { font-weight: 600; }
 .user-card .desc { color: var(--fg2); font-size: 12px; }
 
+/* ============ 阅读历史 ============ */
+.history-sec { max-width: 460px; margin: 26px auto 30px; text-align: left; }
+.history-sec .section-title { display: flex; align-items: center; justify-content: space-between; }
+.btn.small { padding: 4px 12px; font-size: 12px; border-radius: 6px; }
+.history-list { display: flex; flex-direction: column; gap: 8px; }
+.history-item {
+  display: flex; align-items: center; gap: 12px; padding: 10px;
+  background: var(--bg2); border: 1px solid var(--border); border-radius: var(--radius);
+  cursor: pointer;
+}
+.history-item:hover { box-shadow: 0 2px 10px var(--shadow); }
+.history-item .cover { width: 44px; height: 58px; object-fit: cover; border-radius: 6px; flex-shrink: 0; background: var(--border); }
+.history-item .hi-info { flex: 1; min-width: 0; }
+.history-item .hi-info .title { font-size: 13px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.history-item .hi-info .chap { font-size: 12px; color: var(--accent); margin-top: 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.history-item .hi-info .meta { font-size: 11px; color: var(--fg2); margin-top: 2px; }
+.history-item .time { font-size: 11px; color: var(--fg2); flex-shrink: 0; }
+
 /* ============ 书城 ============ */
 .section-title { font-size: 15px; font-weight: 700; margin: 10px 2px 8px; }
 .chips { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 10px; }

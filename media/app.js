@@ -9,9 +9,11 @@
   /** 宿主类型：'panel'=编辑器标签页，'sidebar'=侧边栏视图 */
   var IS_SIDEBAR = document.body && document.body.dataset.host === 'sidebar';
 
-  /** 侧边栏点击书籍 → 在编辑器标签页中打开阅读器 */
-  function openBookInEditor(bookId) {
-    call('open-editor-book', { bookId: bookId, mode: 'reader' }).catch(function () { /* ignore */ });
+  /** 侧边栏点击书籍 → 在编辑器标签页中打开阅读器（itemId 可选：续读历史章节） */
+  function openBookInEditor(bookId, itemId) {
+    var payload = { bookId: bookId, mode: 'reader' };
+    if (itemId) payload.itemId = itemId;
+    call('open-editor-book', payload).catch(function () { /* ignore */ });
   }
 
   /* ---------------- 消息封装 ---------------- */
@@ -479,10 +481,10 @@
     });
   }
 
-  /* ---------------- 登录 ---------------- */
+  /* ---------------- 登录 / 个人信息 ---------------- */
   function renderLogin(view) {
     var wrap = el('div', 'login-wrap');
-    wrap.appendChild(el('h2', null, '登录番茄小说'));
+    wrap.appendChild(el('h2', null, state.loggedIn ? '个人信息' : '登录番茄小说'));
     if (state.loggedIn && state.user) {
       var card = el('div', 'user-card');
       if (state.user.avatar) {
@@ -503,6 +505,49 @@
       wrap.appendChild(renderQrLogin());
     }
     view.appendChild(wrap);
+    renderHistory(view);
+  }
+
+  /* ---------------- 阅读历史 ---------------- */
+  function renderHistory(view) {
+    var sec = el('div', 'history-sec');
+    var head = el('div', 'section-title', '阅读历史');
+    var clear = el('button', 'btn ghost small', '清空');
+    clear.id = 'historyClearBtn';
+    head.appendChild(clear);
+    sec.appendChild(head);
+    var box = el('div', 'history-list');
+    box.id = 'historyList';
+    box.appendChild(el('div', 'loading', '加载中…'));
+    sec.appendChild(box);
+    view.appendChild(sec);
+    call('history-get', {}).then(function (items) {
+      box.innerHTML = '';
+      if (!items || !items.length) {
+        box.appendChild(el('div', 'empty', '暂无阅读历史，打开一本书开始记录'));
+        return;
+      }
+      items.forEach(function (h) {
+        var row = el('div', 'history-item');
+        var img = el('img', 'cover');
+        if (h.coverUrl) { img.src = h.coverUrl; img.onerror = coverFallback; }
+        else img.style.background = 'linear-gradient(135deg,#ff6b3d,#ff3d2e)';
+        var info = el('div', 'hi-info');
+        info.appendChild(el('div', 'title', h.title || h.bookId));
+        if (h.chapterTitle) info.appendChild(el('div', 'chap', '读到：' + h.chapterTitle));
+        else if (h.author) info.appendChild(el('div', 'meta', h.author));
+        var time = el('div', 'time', fmtTime(h.readAt));
+        row.appendChild(img);
+        row.appendChild(info);
+        row.appendChild(time);
+        row.dataset.bookId = h.bookId;
+        row.dataset.itemId = h.itemId || '';
+        box.appendChild(row);
+      });
+    }).catch(function (e) {
+      box.innerHTML = '';
+      box.appendChild(errBox(e.message));
+    });
   }
 
   /* ---------------- 扫码登录 ---------------- */
@@ -632,7 +677,7 @@
   }
 
   /* ---------------- 阅读器 ---------------- */
-  function enterReader(bookId, bookTitle) {
+  function enterReader(bookId, bookTitle, resumeItemId) {
     state.view = 'reader';
     state.inReader = true;
     state.readerBookId = bookId;
@@ -660,12 +705,18 @@
         (d.allItemIds || []).forEach(function (id, i) { chapters.push({ itemId: id, title: '第' + (i + 1) + '章' }); });
       }
       state.chapters = chapters;
-      // 优先从本地书架恢复进度
+      // 恢复进度：历史续读优先，其次本地书架
       var resume = null;
-      var shelfItem = state.shelfLocal.find(function (i) { return i.bookId === bookId; });
-      if (shelfItem && shelfItem.lastReadItemId) {
-        var idx = chapters.findIndex(function (c) { return c.itemId === shelfItem.lastReadItemId; });
-        if (idx >= 0) resume = { idx: idx, itemId: shelfItem.lastReadItemId };
+      if (resumeItemId) {
+        var hidx = chapters.findIndex(function (c) { return c.itemId === resumeItemId; });
+        if (hidx >= 0) resume = { idx: hidx, itemId: resumeItemId };
+      }
+      if (!resume) {
+        var shelfItem = state.shelfLocal.find(function (i) { return i.bookId === bookId; });
+        if (shelfItem && shelfItem.lastReadItemId) {
+          var idx = chapters.findIndex(function (c) { return c.itemId === shelfItem.lastReadItemId; });
+          if (idx >= 0) resume = { idx: idx, itemId: shelfItem.lastReadItemId };
+        }
       }
       if (resume) {
         state.chapterIdx = resume.idx;
@@ -722,11 +773,12 @@
   function saveReadingProgress(c) {
     if (!state.readerBookId) return;
     var idx = state.shelfLocal.findIndex(function (i) { return i.bookId === state.readerBookId; });
+    var cover = state.bookCoverUrl || (idx >= 0 ? state.shelfLocal[idx].coverUrl : '') || '';
     var item = {
       bookId: state.readerBookId,
       title: state.readerBookTitle || c.bookName || state.readerBookId,
       author: c.author || '',
-      coverUrl: state.bookCoverUrl || (idx >= 0 ? state.shelfLocal[idx].coverUrl : '') || '',
+      coverUrl: cover,
       addedAt: idx >= 0 ? state.shelfLocal[idx].addedAt : Date.now(),
       lastReadItemId: c.itemId,
       lastReadChapterTitle: c.title,
@@ -735,6 +787,16 @@
     if (idx >= 0) state.shelfLocal[idx] = item;
     else state.shelfLocal.unshift(item);
     call('shelf-local-set', { items: state.shelfLocal }).catch(function () { /* ignore */ });
+    // 记录阅读历史（本地，无需登录）
+    call('history-record', {
+      bookId: state.readerBookId,
+      title: state.readerBookTitle || c.bookName || state.readerBookId,
+      author: c.author || '',
+      coverUrl: cover,
+      itemId: c.itemId,
+      chapterTitle: c.title,
+      order: Number(c.realChapterOrder || c.order || 0),
+    }).catch(function () { /* ignore */ });
     if (state.loggedIn) {
       call('progress-update', {
         bookId: state.readerBookId,
@@ -1220,6 +1282,29 @@
       });
       return;
     }
+    // 阅读历史：点击条目续读
+    var histItem = t.closest ? t.closest('.history-item') : null;
+    if (histItem && state.view === 'login') {
+      var hBookId = histItem.dataset.bookId;
+      var hItemId = histItem.dataset.itemId;
+      if (IS_SIDEBAR) {
+        openBookInEditor(hBookId, hItemId);
+      } else {
+        enterReader(hBookId, '', hItemId);
+      }
+      return;
+    }
+    var histClear = t.closest ? t.closest('#historyClearBtn') : null;
+    if (histClear) {
+      call('history-clear', {}).then(function () {
+        var box = $('#historyList');
+        if (box) {
+          box.innerHTML = '';
+          box.appendChild(el('div', 'empty', '暂无阅读历史，打开一本书开始记录'));
+        }
+      }).catch(function () { /* ignore */ });
+      return;
+    }
     // 书籍弹窗
     if (t.id === 'readBtn') {
       document.getElementById('bookModal') && document.getElementById('bookModal').remove();
@@ -1457,11 +1542,11 @@
       return;
     }
     if (m.type === 'open-book-reader') {
-      // 侧边栏/命令请求：直接在阅读器中打开书籍
+      // 侧边栏/命令请求：直接在阅读器中打开书籍（itemId 可选：续读历史章节）
       if (IS_SIDEBAR) {
         // 侧边栏收到此消息说明面板已打开，这里无操作（面板处理）
       } else {
-        enterReader(m.bookId, '');
+        enterReader(m.bookId, '', m.itemId || '');
       }
       return;
     }
