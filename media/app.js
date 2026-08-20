@@ -509,21 +509,73 @@
   }
 
   /* ---------------- 阅读历史 ---------------- */
+  function mergeHistory(local, cloud) {
+    var map = {};
+    (cloud || []).forEach(function (c) {
+      map[c.bookId] = {
+        bookId: c.bookId,
+        title: c.title || '',
+        author: c.author || '',
+        coverUrl: c.coverUrl || '',
+        itemId: c.itemId || '',
+        chapterTitle: c.chapterTitle || '',
+        order: Number(c.order || 0),
+        readAt: Number(c.readAt || 0),
+      };
+    });
+    (local || []).forEach(function (l) {
+      var ex = map[l.bookId];
+      if (!ex) {
+        map[l.bookId] = {
+          bookId: l.bookId,
+          title: l.title || '',
+          author: l.author || '',
+          coverUrl: l.coverUrl || '',
+          itemId: l.itemId || '',
+          chapterTitle: l.chapterTitle || '',
+          order: Number(l.order || 0),
+          readAt: Number(l.readAt || 0),
+        };
+      } else {
+        // 取更晚的阅读时间；章节信息以更新的那条为准，云端缺字段用本地补
+        if ((l.readAt || 0) > (ex.readAt || 0)) {
+          ex.readAt = l.readAt;
+          if (l.itemId) ex.itemId = l.itemId;
+          if (l.chapterTitle) ex.chapterTitle = l.chapterTitle;
+          if (l.order) ex.order = l.order;
+        } else if (!ex.chapterTitle && l.chapterTitle) {
+          ex.chapterTitle = l.chapterTitle;
+        }
+        if (!ex.title && l.title) ex.title = l.title;
+        if (!ex.author && l.author) ex.author = l.author;
+        if (!ex.coverUrl && l.coverUrl) ex.coverUrl = l.coverUrl;
+      }
+    });
+    return Object.keys(map).map(function (k) { return map[k]; })
+      .sort(function (a, b) { return (b.readAt || 0) - (a.readAt || 0); });
+  }
+
   function renderHistory(view) {
     var sec = el('div', 'history-sec');
     var head = el('div', 'section-title', '阅读历史');
-    var clear = el('button', 'btn ghost small', '清空');
+    var clear = el('button', 'btn ghost small', '清空本地');
     clear.id = 'historyClearBtn';
     head.appendChild(clear);
     sec.appendChild(head);
+    if (state.loggedIn) sec.appendChild(el('div', 'history-hint', '已登录：自动合并云端阅读进度'));
     var box = el('div', 'history-list');
     box.id = 'historyList';
     box.appendChild(el('div', 'loading', '加载中…'));
     sec.appendChild(box);
     view.appendChild(sec);
-    call('history-get', {}).then(function (items) {
+    var localP = call('history-get', {});
+    var cloudP = state.loggedIn
+      ? call('history-cloud-get', {}).catch(function () { return []; })
+      : Promise.resolve([]);
+    Promise.all([localP, cloudP]).then(function (rs) {
+      var items = mergeHistory(rs[0] || [], rs[1] || []);
       box.innerHTML = '';
-      if (!items || !items.length) {
+      if (!items.length) {
         box.appendChild(el('div', 'empty', '暂无阅读历史，打开一本书开始记录'));
         return;
       }

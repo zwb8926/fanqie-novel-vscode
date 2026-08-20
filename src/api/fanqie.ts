@@ -731,6 +731,85 @@ export async function updateReadProgress(bookId: string, itemId: string, order =
   }
 }
 
+/* ------------------------------ 阅读历史（云端） ------------------------------ */
+
+export interface CloudHistoryItem {
+  bookId: string;
+  itemId: string;
+  order: number;
+  /** 最后阅读时间（毫秒） */
+  readAt: number;
+  title?: string;
+  author?: string;
+  coverUrl?: string;
+  chapterTitle?: string;
+}
+
+/**
+ * 云端阅读历史：基于「阅读进度」接口（登录后返回每本书最后读到的章节与时间戳）。
+ * 换设备登录后也能看到历史；配合 simple/info 与 multidetail 补充书名/封面/章节名。
+ * 未登录或失败时返回空数组（前端降级为纯本地历史）。
+ */
+export async function getCloudReadHistory(): Promise<CloudHistoryItem[]> {
+  const prog = await getReadProgress();
+  const items: CloudHistoryItem[] = prog
+    .filter(p => p.book_id)
+    .map(p => ({
+      bookId: p.book_id,
+      itemId: p.item_id,
+      order: 0,
+      readAt: Number(p.read_timestamp ?? 0) * 1000,
+    }));
+  if (!items.length) return items;
+
+  // 1) 简单信息：书名/作者/封面
+  try {
+    const s = await requestJson<any>(`${C.HOST}/api/book/simple/info`, {
+      method: 'POST',
+      headers: webHeaders({ 'Content-Type': 'application/json' }),
+      body: JSON.stringify({ book_ids: items.map(i => i.bookId) }),
+    });
+    const bookList: any[] = s.data?.bookList ?? [];
+    for (const it of items) {
+      const b = bookList.find((x: any) => String(x.book_id) === it.bookId);
+      if (b) {
+        it.title = dec(b.book_name ?? '');
+        it.author = dec(b.author_name ?? '');
+        it.coverUrl = b.thumb_url ?? '';
+      }
+    }
+  } catch {
+    /* 可选步骤 */
+  }
+
+  // 2) 书架详情：当前章节标题（尽力而为）
+  try {
+    const m = await requestJson<any>(`${C.HOST}${C.BOOKSHELF_MULTIDETAIL}`, {
+      method: 'POST',
+      headers: webHeaders({ 'Content-Type': 'application/json' }),
+      body: JSON.stringify({
+        books: items.map(i => ({ book_id: i.bookId, item_id: i.itemId || '0' })),
+      }),
+    });
+    const detailList: any[] = m.data?.detail_list ?? [];
+    for (const it of items) {
+      const d = detailList.find((x: any) => String(x.book_id) === it.bookId);
+      if (d) {
+        it.title = dec(d.book_name ?? it.title ?? '');
+        it.author = dec(d.author_name ?? it.author ?? '');
+        it.coverUrl = d.thumb_url ?? it.coverUrl ?? '';
+        it.chapterTitle = dec(d.item_show_title ?? '');
+        it.order = Number(d.read_progress ?? d.index ?? it.order ?? 0);
+      }
+    }
+  } catch {
+    /* 可选步骤 */
+  }
+
+  items.sort((a, b) => b.readAt - a.readAt);
+  return items;
+}
+
 /* ---------------------------------- 书评 ---------------------------------- */
 
 /** 从书籍页 HTML 收集 SEO 评论链接 */
