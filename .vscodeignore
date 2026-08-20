@@ -1,0 +1,7 @@
+node_modules/
+*.vsix
+scripts/
+.vscode/**
+**/*.map
+**/*.ts
+research/

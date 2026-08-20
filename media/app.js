@@ -1,0 +1,1776 @@
+/* =========================================================
+ * 番茄小说 Webview 前端（纯 JS，无框架）
+ * 所有网络请求都通过 postMessage 转发到扩展宿主执行。
+ * ========================================================= */
+(function () {
+  'use strict';
+
+  var vscode = acquireVsCodeApi();
+  /** 宿主类型：'panel'=编辑器标签页，'sidebar'=侧边栏视图 */
+  var IS_SIDEBAR = document.body && document.body.dataset.host === 'sidebar';
+
+  /** 侧边栏点击书籍 → 在编辑器标签页中打开阅读器 */
+  function openBookInEditor(bookId) {
+    call('open-editor-book', { bookId: bookId, mode: 'reader' }).catch(function () { /* ignore */ });
+  }
+
+  /* ---------------- 消息封装 ---------------- */
+  var msgId = 0;
+  var pending = new Map();
+  function call(type, payload) {
+    return new Promise(function (resolve, reject) {
+      var id = ++msgId;
+      pending.set(id, { resolve: resolve, reject: reject });
+      var m = { type: type, id: id };
+      if (payload) Object.keys(payload).forEach(function (k) { m[k] = payload[k]; });
+      vscode.postMessage(m);
+      setTimeout(function () {
+        if (pending.has(id)) { pending.delete(id); reject(new Error('请求超时，请重试')); }
+      }, 90000);
+    });
+  }
+
+  /* ---------------- 状态 ---------------- */
+  var state = {
+    view: 'bookstore',
+    user: null,
+    loggedIn: false,
+    settings: { fontSize: 19, lineHeight: 1.9, theme: 'night', showBars: true },
+    // 书城
+    rankCats: [],
+    rankCatsLoaded: false,
+    rankType: 3,
+    rankGender: 'male',
+    rankCat: '',
+    rankBooks: [],
+    rankOffset: 0,
+    rankLoading: false,
+    rankHasMore: false,
+    // 搜索
+    query: '',
+    searchPage: 0,
+    searchBooks: [],
+    searchTotal: 0,
+    searching: false,
+    // 书籍
+    book: null,
+    directory: null,
+    // 阅读器
+    inReader: false,
+    readerBookId: null,
+    readerBookTitle: '',
+    chapters: [],
+    chapterIdx: -1,
+    chapter: null,
+    pages: [],
+    pageIdx: 0,
+    readerLoading: false,
+    readerError: null,
+    // 抽屉
+    drawer: null, // 'catalog' | 'comments' | null
+    commentsKind: 'chapter',
+    comments: [],
+    commentsLoading: false,
+    commentsError: null,
+    activeParagraphIdx: -1,
+    settingsOpen: false,
+    // 书架
+    shelfLocal: [],
+    shelfRemote: [],
+    shelfLoading: false,
+    // 登录
+    qrSession: 0,
+    qrUrl: null,
+    qrText: null,
+    qrStatusText: '未登录',
+    qrStatusClass: '',
+    qrWorking: false,
+    // 手机号登录
+    sms: { tab: 'qr', mobile: '', code: '', ticket: '', countdown: 0, status: '', statusClass: '', loggingIn: false, captcha: { conf: null, mounted: false } },
+  };
+
+  // 确保 sms.captcha 等新增字段存在（防止旧版本残留状态导致渲染崩溃）
+  if (!state.sms || !state.sms.captcha) {
+    state.sms = { tab: 'qr', mobile: '', code: '', ticket: '', countdown: 0, status: '', statusClass: '', loggingIn: false, captcha: { conf: null, mounted: false } };
+  }
+
+  function saveState() {
+    try { vscode.setState(state); } catch (e) { /* ignore */ }
+  }
+  var prevState = vscode.getState();
+  // 只恢复安全的标量字段（settings），避免旧结构覆盖新结构
+  if (prevState && prevState.settings) {
+    state.settings = Object.assign(state.settings, prevState.settings);
+  }
+
+  /* ---------------- DOM 工具 ---------------- */
+  function el(tag, className, text) {
+    var e = document.createElement(tag);
+    if (className) e.className = className;
+    if (text !== undefined) e.textContent = text;
+    return e;
+  }
+  function $(sel, root) { return (root || document).querySelector(sel); }
+  function $$(sel, root) { return Array.prototype.slice.call((root || document).querySelectorAll(sel)); }
+  function esc(s) {
+    return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) {
+      return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
+    });
+  }
+  function fmtTime(ts) {
+    if (!ts) return '';
+    var d = new Date(ts);
+    var p = function (n) { return String(n).padStart(2, '0'); };
+    return d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate()) + ' ' + p(d.getHours()) + ':' + p(d.getMinutes());
+  }
+  function fmtWord(n) {
+    n = Number(n || 0);
+    if (!n) return '';
+    if (n >= 10000) return (n / 10000).toFixed(1).replace(/\.0$/, '') + '万字';
+    return n + '字';
+  }
+  function fmtCount(n) {
+    n = Number(n || 0);
+    if (n >= 10000) return (n / 10000).toFixed(1).replace(/\.0$/, '') + '万';
+    return String(n);
+  }
+  function coverFallback(e) {
+    e.onerror = null;
+    e.src = '';
+    e.style.background = 'linear-gradient(135deg,#ff6b3d,#ff3d2e)';
+  }
+  function statusText(cs) {
+    if (cs === '0') return '完结';
+    if (cs === '1') return '连载';
+    if (cs === '4') return '断更';
+    return '';
+  }
+
+  /* ---------------- 全局渲染 ---------------- */
+  var app = document.getElementById('app');
+
+  function applySettings() {
+    document.documentElement.dataset.theme = state.settings.theme;
+    var root = document.documentElement;
+    root.style.setProperty('--reader-font-size', state.settings.fontSize + 'px');
+    root.style.setProperty('--reader-line-height', String(state.settings.lineHeight));
+  }
+
+  function render() {
+    applySettings();
+    if (state.view === 'reader') {
+      renderReader();
+      return;
+    }
+    var nav = el('div', 'navbar');
+    nav.appendChild(el('span', 'brand', '🍅 番茄小说'));
+    var tab = function (id, label) {
+      var b = el('button', 'nav-tab' + (state.view === id ? ' active' : ''), label);
+      b.dataset.nav = id;
+      return b;
+    };
+    nav.appendChild(tab('bookstore', '书城'));
+    nav.appendChild(tab('search', '搜索'));
+    nav.appendChild(tab('shelf', '书架'));
+    nav.appendChild(el('span', 'spacer'));
+    var userBtn = el('div', 'nav-user');
+    userBtn.dataset.nav = 'login';
+    if (state.user) {
+      if (state.user.avatar) {
+        var img = el('img');
+        img.src = state.user.avatar;
+        img.onerror = function () { img.style.display = 'none'; };
+        userBtn.appendChild(img);
+      } else {
+        userBtn.appendChild(el('span', 'avatar-fallback', (state.user.name || '?').slice(0, 1)));
+      }
+      userBtn.appendChild(el('span', null, state.user.name || '已登录'));
+    } else {
+      userBtn.appendChild(el('span', 'avatar-fallback', '登'));
+      userBtn.appendChild(el('span', null, '登录'));
+    }
+    nav.appendChild(userBtn);
+
+    app.innerHTML = '';
+    app.appendChild(nav);
+    var view = el('div', 'view');
+    view.id = 'view';
+    app.appendChild(view);
+
+    renderView();
+  }
+
+
+  function rerenderLogin() {
+    var v = $('#view');
+    if (v) v.innerHTML = '';
+    renderView();
+  }
+  function renderView() {
+    var view = $('#view');
+    if (!view) return;
+    view.innerHTML = '';
+    switch (state.view) {
+      case 'bookstore': renderBookstore(view); break;
+      case 'search': renderSearch(view); break;
+      case 'shelf': renderShelf(view); break;
+      case 'login': renderLogin(view); break;
+    }
+  }
+
+  /* ---------------- 书城 ---------------- */
+  function renderBookstore(view) {
+    if (!state.rankCatsLoaded) {
+      view.appendChild(el('div', 'loading', '加载中…'));
+      call('rank-categories', {}).then(function (cats) {
+        state.rankCats = cats || [];
+        state.rankCatsLoaded = true;
+        renderView();
+      }).catch(function (e) {
+        view.innerHTML = '';
+        view.appendChild(errBox(e.message));
+      });
+      return;
+    }
+    // 性别与榜单类型
+    var genders = [{ v: 'male', l: '男频' }, { v: 'female', l: '女频' }];
+    var types = [{ v: 3, l: '推荐' }, { v: 1, l: '热读' }, { v: 6, l: '新书' }, { v: 4, l: '完结' }, { v: 5, l: '更新' }];
+    var chips = el('div', 'chips');
+    genders.forEach(function (g) {
+      var c = el('button', 'chip' + (state.rankGender === g.v ? ' active' : ''), g.l);
+      c.dataset.gender = g.v;
+      chips.appendChild(c);
+    });
+    chips.appendChild(el('span', 'spacer'));
+    types.forEach(function (t) {
+      var c = el('button', 'chip' + (state.rankType === t.v ? ' active' : ''), t.l);
+      c.dataset.rankType = String(t.v);
+      chips.appendChild(c);
+    });
+    view.appendChild(chips);
+    // 分类
+    var cats = state.rankCats.filter(function (c) { return c.group && c.group.indexOf(state.rankGender) >= 0; });
+    if (cats.length) {
+      var catChips = el('div', 'chips');
+      var all = el('button', 'chip' + (!state.rankCat ? ' active' : ''), '全部');
+      all.dataset.cat = '';
+      catChips.appendChild(all);
+      cats.slice(0, 24).forEach(function (c) {
+        var b = el('button', 'chip' + (state.rankCat === c.id ? ' active' : ''), c.name);
+        b.dataset.cat = c.id;
+        catChips.appendChild(b);
+      });
+      view.appendChild(catChips);
+    }
+    var title = el('div', 'section-title', '排行榜');
+    view.appendChild(title);
+    var grid = el('div', 'book-grid');
+    grid.id = 'rankGrid';
+    view.appendChild(grid);
+    renderRankGrid(grid);
+    if (state.rankHasMore) {
+      var more = el('button', 'btn secondary load-more', '加载更多');
+      more.id = 'rankMore';
+      view.appendChild(more);
+    }
+  }
+
+  function renderRankGrid(grid) {
+    if (state.rankLoading) {
+      grid.innerHTML = '';
+      grid.appendChild(el('div', 'loading', '加载中…'));
+      return;
+    }
+    if (!state.rankBooks.length) {
+      grid.innerHTML = '';
+      grid.appendChild(el('div', 'empty', '暂无书籍'));
+      return;
+    }
+    grid.innerHTML = '';
+    state.rankBooks.forEach(function (b) {
+      var card = el('div', 'book-card');
+      card.dataset.bookId = b.bookId;
+      var img = el('img', 'cover');
+      img.loading = 'lazy';
+      if (b.thumbUri) { img.src = b.thumbUri; img.onerror = coverFallback; }
+      else img.style.background = 'linear-gradient(135deg,#ff6b3d,#ff3d2e)';
+      var info = el('div', 'info');
+      info.appendChild(el('div', 'title', b.bookName || '未知书名'));
+      info.appendChild(el('div', 'meta', (b.author || '') + (b.readCount ? ' · ' + fmtCount(b.readCount) + '人在读' : '')));
+      card.appendChild(img);
+      card.appendChild(info);
+      grid.appendChild(card);
+    });
+  }
+
+  function loadRank(reset) {
+    if (state.rankLoading) return;
+    if (reset) { state.rankBooks = []; state.rankOffset = 0; }
+    state.rankLoading = true;
+    renderView();
+    call('rank-list', {
+      rankListType: state.rankType,
+      categoryId: state.rankCat,
+      gender: state.rankGender,
+      offset: state.rankOffset,
+      limit: 24,
+    }).then(function (r) {
+      var list = (r && r.book_list) || [];
+      state.rankBooks = reset ? list : state.rankBooks.concat(list);
+      state.rankOffset = state.rankBooks.length;
+      state.rankHasMore = list.length >= 24;
+      state.rankLoading = false;
+      renderView();
+    }).catch(function (e) {
+      state.rankLoading = false;
+      var grid = $('#rankGrid');
+      if (grid) { grid.innerHTML = ''; grid.appendChild(errBox(e.message)); }
+    });
+  }
+
+  /* ---------------- 搜索 ---------------- */
+  function renderSearch(view) {
+    var bar = el('div', 'search-bar');
+    var input = el('input');
+    input.id = 'searchInput';
+    input.placeholder = '输入书名 / 作者，回车搜索';
+    input.value = state.query;
+    input.addEventListener('keydown', function (ev) {
+      if (ev.key === 'Enter') doSearch(true);
+    });
+    var btn = el('button', 'btn', '搜索');
+    btn.addEventListener('click', function () { doSearch(true); });
+    bar.appendChild(input);
+    bar.appendChild(btn);
+    view.appendChild(bar);
+
+    if (state.searching) {
+      view.appendChild(el('div', 'loading', '搜索中…'));
+      return;
+    }
+    if (state.searchBooks.length) {
+      var list = el('div', 'search-list');
+      state.searchBooks.forEach(function (b) {
+        var row = el('div', 'row');
+        row.dataset.bookId = b.book_id;
+        var img = el('img', 'cover');
+        if (b.thumb_url) { img.src = b.thumb_url; img.onerror = coverFallback; }
+        else img.style.background = 'linear-gradient(135deg,#ff6b3d,#ff3d2e)';
+        var right = el('div');
+        right.style.flex = '1';
+        right.style.minWidth = '0';
+        var t = el('div', 't', b.book_name);
+        var tags = el('div');
+        var st = statusText(b.creation_status);
+        if (st) tags.appendChild(el('span', 'tag', st));
+        if (b.score) tags.appendChild(el('span', 'tag', '评分 ' + b.score));
+        if (b.category) tags.appendChild(el('span', 'tag', b.category));
+        var a = el('div', 'a', (b.author || '') + (fmtWord(b.word_number) ? ' · ' + fmtWord(b.word_number) : '') + (b.serial_count ? ' · ' + b.serial_count + '章' : ''));
+        right.appendChild(t);
+        right.appendChild(tags);
+        right.appendChild(a);
+        if (b.abstract) right.appendChild(el('div', 'abs', b.abstract));
+        row.appendChild(img);
+        row.appendChild(right);
+        list.appendChild(row);
+      });
+      view.appendChild(list);
+      if (state.searchBooks.length < state.searchTotal) {
+        var more = el('button', 'btn secondary load-more', '加载更多');
+        more.id = 'searchMore';
+        view.appendChild(more);
+      }
+    } else if (state.query) {
+      view.appendChild(el('div', 'empty', '没有找到相关书籍'));
+    } else {
+      view.appendChild(el('div', 'empty', '输入关键词开始搜索'));
+    }
+  }
+
+  function doSearch(reset) {
+    var input = $('#searchInput');
+    if (input) state.query = input.value.trim();
+    if (!state.query) return;
+    if (reset) { state.searchPage = 0; state.searchBooks = []; }
+    state.searching = true;
+    renderView();
+    call('search', { query: state.query, page: state.searchPage, pageSize: 10 }).then(function (r) {
+      state.searchBooks = reset ? r.books : state.searchBooks.concat(r.books);
+      state.searchTotal = r.total;
+      state.searchPage = reset ? 1 : state.searchPage + 1;
+      state.searching = false;
+      renderView();
+    }).catch(function (e) {
+      state.searching = false;
+      var view = $('#view');
+      if (view) { view.innerHTML = ''; view.appendChild(errBox(e.message)); }
+    });
+  }
+
+  /* ---------------- 书架 ---------------- */
+  function renderShelf(view) {
+    state.shelfLoading = true;
+    Promise.all([
+      call('shelf-local-get', {}),
+      call('shelf-remote-get', {}),
+    ]).then(function (rs) {
+      state.shelfLocal = rs[0] || [];
+      state.shelfRemote = (rs[1] && rs[1].entries) || [];
+      state.shelfLoading = false;
+      view.innerHTML = '';
+      var sec = el('div', 'section-title', '本地书架');
+      view.appendChild(sec);
+      var grid = el('div', 'shelf-grid');
+      if (state.shelfLocal.length) {
+        state.shelfLocal.forEach(function (it) {
+          var item = el('div', 'shelf-item');
+          var img = el('img', 'cover');
+          if (it.coverUrl) { img.src = it.coverUrl; img.onerror = coverFallback; }
+          else img.style.background = 'linear-gradient(135deg,#ff6b3d,#ff3d2e)';
+          img.dataset.bookId = it.bookId;
+          var rm = el('button', 'remove', '✕');
+          rm.dataset.remove = it.bookId;
+          var title = el('div', 'title', it.title || it.bookId);
+          title.dataset.bookId = it.bookId;
+          item.appendChild(rm);
+          item.appendChild(img);
+          item.appendChild(title);
+          if (it.lastReadChapterTitle) {
+            var rd = el('div', 'reading', '读到：' + it.lastReadChapterTitle);
+            rd.dataset.bookId = it.bookId;
+            item.appendChild(rd);
+          } else {
+            item.appendChild(el('div', 'meta', it.author || ''));
+          }
+          grid.appendChild(item);
+        });
+      } else {
+        grid.appendChild(el('div', 'empty', '书架为空，在书城或搜索中添加书籍'));
+      }
+      view.appendChild(grid);
+      if (state.loggedIn) {
+        view.appendChild(el('div', 'section-title', '云端书架'));
+        var grid2 = el('div', 'shelf-grid');
+        if (state.shelfRemote.length) {
+          state.shelfRemote.forEach(function (it) {
+            var item = el('div', 'shelf-item');
+            var img = el('img', 'cover');
+            if (it.cover_url) { img.src = it.cover_url; img.onerror = coverFallback; }
+            else img.style.background = 'linear-gradient(135deg,#888,#aaa)';
+            img.dataset.bookId = it.book_id;
+            var t = el('div', 'title', it.title || it.book_id);
+            t.dataset.bookId = it.book_id;
+            item.appendChild(img);
+            item.appendChild(t);
+            if (it.current_chapter_title) {
+              var rd = el('div', 'reading', '读到：' + it.current_chapter_title);
+              rd.dataset.bookId = it.book_id;
+              item.appendChild(rd);
+            } else if (it.author) {
+              item.appendChild(el('div', 'meta', it.author));
+            }
+            grid2.appendChild(item);
+          });
+        } else {
+          grid2.appendChild(el('div', 'empty', '云端书架为空'));
+        }
+        view.appendChild(grid2);
+      } else {
+        view.appendChild(el('div', 'section-title', '云端书架'));
+        view.appendChild(el('div', 'empty', '登录后可同步云端书架'));
+      }
+    }).catch(function (e) {
+      view.innerHTML = '';
+      view.appendChild(errBox(e.message));
+    });
+  }
+
+  /* ---------------- 登录 ---------------- */
+  function renderLogin(view) {
+    var wrap = el('div', 'login-wrap');
+    wrap.appendChild(el('h2', null, '登录番茄小说'));
+    if (state.loggedIn && state.user) {
+      var card = el('div', 'user-card');
+      if (state.user.avatar) {
+        var img = el('img');
+        img.src = state.user.avatar;
+        img.onerror = function () { img.style.display = 'none'; };
+        card.appendChild(img);
+      }
+      var right = el('div');
+      right.appendChild(el('div', 'name', state.user.name || '已登录'));
+      if (state.user.desc) right.appendChild(el('div', 'desc', state.user.desc));
+      card.appendChild(right);
+      wrap.appendChild(card);
+      var logout = el('button', 'btn secondary', '退出登录');
+      logout.id = 'logoutBtn';
+      wrap.appendChild(logout);
+    } else {
+      // 方式切换：扫码（默认）/ 手机号
+      var tabs = el('div', 'chips');
+      var qrTab = el('button', 'chip' + (state.sms.tab === 'qr' ? ' active' : ''), '扫码登录');
+      qrTab.id = 'qrTabBtn';
+      var smsTab = el('button', 'chip' + (state.sms.tab === 'sms' ? ' active' : ''), '手机号登录');
+      smsTab.id = 'smsTabBtn';
+      tabs.appendChild(qrTab);
+      tabs.appendChild(smsTab);
+      wrap.appendChild(tabs);
+
+      if (state.sms.tab === 'sms') {
+        wrap.appendChild(renderSmsLogin());
+      } else {
+        wrap.appendChild(renderQrLogin());
+      }
+    }
+    view.appendChild(wrap);
+  }
+
+  /* ---------------- 手机号登录 ---------------- */
+  function renderSmsLogin() {
+    var box = el('div');
+    var sub = el('div', 'sub', '使用手机号 + 验证码登录（走官网同源接口，受风控影响小）');
+    box.appendChild(sub);
+    // 手机号
+    var phoneRow = el('div', 'search-bar');
+    var region = el('span', 'tag', '+86');
+    var phone = el('input');
+    phone.id = 'smsMobile';
+    phone.type = 'tel';
+    phone.maxLength = '11';
+    phone.placeholder = '请输入 11 位手机号';
+    phone.value = state.sms.mobile;
+    phoneRow.appendChild(region);
+    phoneRow.appendChild(phone);
+    box.appendChild(phoneRow);
+    // 验证码
+    var codeRow = el('div', 'search-bar');
+    var code = el('input');
+    code.id = 'smsCode';
+    code.type = 'text';
+    code.maxLength = '8';
+    code.placeholder = '请输入短信验证码';
+    code.value = state.sms.code;
+    codeRow.appendChild(code);
+    var sendBtn = el('button', 'btn secondary', state.sms.countdown > 0 ? state.sms.countdown + 's 后重发' : '发送验证码');
+    sendBtn.id = 'smsSendBtn';
+    if (state.sms.countdown > 0) sendBtn.disabled = true;
+    codeRow.appendChild(sendBtn);
+    box.appendChild(codeRow);
+    // 登录
+    var loginBtn = el('button', 'btn', state.sms.loggingIn ? '登录中…' : '登 录');
+    loginBtn.id = 'smsLoginBtn';
+    if (state.sms.loggingIn) loginBtn.disabled = true;
+    box.appendChild(loginBtn);
+    // 状态
+    var status = el('div', 'qr-status' + (state.sms.statusClass ? ' ' + state.sms.statusClass : ''), state.sms.status || '');
+    status.id = 'smsStatus';
+    box.appendChild(status);
+    // 滑块验证容器（服务端要求验证时挂载）
+    if (state.sms.captcha.conf) {
+      var capBox = el('div', 'captcha-wrap');
+      capBox.id = 'captchaBox';
+      capBox.appendChild(el('div', 'captcha-title', '该手机号需要安全验证，请完成下方滑块：'));
+      var capInner = el('div');
+      capInner.id = 'captcha_container';
+      capBox.appendChild(capInner);
+      box.appendChild(capBox);
+      state.sms.captcha.mounted = false;
+      setTimeout(function () { mountCaptcha(); }, 80);
+    }
+    var hint = el('div', 'cookie-hint', '未收到验证码？请确认手机号正确；若提示需要图形验证码，说明该号码需安全验证，可改用扫码或粘贴 Cookie 登录。');
+    box.appendChild(hint);
+    return box;
+  }
+
+  /* ---------------- 扫码登录 ---------------- */
+  function renderQrLogin() {
+    var box = el('div');
+    var sub = el('div', 'sub', '使用抖音 / 番茄小说 App 扫码，即可同步书架与阅读进度');
+    box.appendChild(sub);
+    var qrBox = el('div', 'qr-box');
+    qrBox.id = 'qrBox';
+    if (state.qrUrl) {
+      var img = el('img');
+      img.id = 'qrImg';
+      img.src = state.qrUrl;
+      img.onerror = function () { img.style.display = 'none'; showQrFallback(qrBox); };
+      qrBox.appendChild(img);
+    } else if (state.qrText) {
+      renderQrText(qrBox, state.qrText);
+    } else {
+      qrBox.appendChild(el('div', 'placeholder', '点击下方按钮生成二维码'));
+    }
+    box.appendChild(qrBox);
+    var status = el('div', 'qr-status' + (state.qrStatusClass ? ' ' + state.qrStatusClass : ''), state.qrStatusText);
+    status.id = 'qrStatus';
+    box.appendChild(status);
+    var actions = el('div');
+    var startBtn = el('button', 'btn', state.qrWorking ? '生成中…' : '开始扫码登录');
+    startBtn.id = 'qrStart';
+    if (state.qrWorking) startBtn.disabled = true;
+    var refreshBtn = el('button', 'btn ghost', '刷新二维码');
+    refreshBtn.id = 'qrRefresh';
+    actions.appendChild(startBtn);
+    actions.appendChild(refreshBtn);
+    box.appendChild(actions);
+    // Cookie 导入兜底
+    var paste = el('div', 'cookie-paste');
+    var details = el('details');
+    var sum = el('summary', null, '手动登录：粘贴浏览器 Cookie（备用方案）');
+    details.appendChild(sum);
+    var ta = el('textarea');
+    ta.id = 'cookieInput';
+    ta.placeholder = '在浏览器登录 fanqienovel.com 后，复制 Cookie 粘贴到这里';
+    var hint = el('div', 'cookie-hint',
+      '操作步骤：① 浏览器打开 fanqienovel.com 并登录；② F12 → 网络/应用 中复制 Cookie；③ 粘贴到上方并点击「导入」。');
+    var imp = el('button', 'btn secondary', '导入 Cookie 登录');
+    imp.id = 'cookieImport';
+    details.appendChild(ta);
+    details.appendChild(hint);
+    details.appendChild(imp);
+    paste.appendChild(details);
+    box.appendChild(paste);
+    return box;
+  }
+
+  function sendSms() {
+    var mobile = state.sms.mobile.trim();
+    if (!/^1[3-9]\d{9}$/.test(mobile)) {
+      state.sms.status = '请输入正确的 11 位手机号';
+      state.sms.statusClass = 'err';
+      rerenderLogin();
+      return;
+    }
+    state.sms.status = '正在发送验证码…';
+    state.sms.statusClass = '';
+    var btn = $('#smsSendBtn');
+    if (btn) { btn.disabled = true; btn.textContent = '发送中…'; }
+    call('sms-send', { mobile: mobile }).then(function (r) {
+      if (r && r.needCaptcha) {
+        // 需要滑块验证：挂载官方验证中心
+        state.sms.captcha.conf = r.verifyConf || {};
+        state.sms.status = '需要安全验证';
+        state.sms.statusClass = '';
+        var b = $('#smsSendBtn');
+        if (b) { b.disabled = false; b.textContent = '发送验证码'; }
+        rerenderLogin();
+        return;
+      }
+      state.sms.ticket = r.mobileTicket || '';
+      state.sms.status = '验证码已发送，请查收短信';
+      state.sms.statusClass = 'ok';
+      state.sms.countdown = 60;
+      startSmsCountdown();
+      rerenderLogin();
+    }).catch(function (e) {
+      state.sms.status = e.message;
+      state.sms.statusClass = 'err';
+      var b = $('#smsSendBtn');
+      if (b) { b.disabled = false; b.textContent = '发送验证码'; }
+      rerenderLogin();
+    });
+  }
+
+  /* ---------------- 滑块验证（官方验证中心） ---------------- */
+  function loadScript(url, onload, onerror) {
+    var s = document.createElement('script');
+    s.src = url;
+    s.onload = onload;
+    s.onerror = onerror;
+    document.head.appendChild(s);
+  }
+
+  function mountCaptcha() {
+    if (!state.sms.captcha || !state.sms.captcha.conf || state.sms.captcha.mounted) return;
+    if (!$('#captcha_container')) return;
+    state.sms.captcha.mounted = true;
+    var statusEl = $('#smsStatus');
+    if (statusEl) { statusEl.textContent = '正在加载滑块验证…'; statusEl.className = 'qr-status'; }
+    var CDN = 'https://lf-rc1.yhgfb-cn-static.com/obj/rc-client-security/secsdk-captcha/@latest/captcha.js';
+    loadScript(CDN, function () {
+      try {
+        var api = window.renderCaptcha ||
+          (window.verifyCenter && window.verifyCenter.renderCaptcha) ||
+          (window.verifySDK && window.verifySDK.renderCaptcha);
+        if (typeof api !== 'function') throw new Error('验证组件不可用');
+        api({
+          aid: 2503,
+          ele: 'captcha_container',
+          verify_data: state.sms.captcha.conf,
+          captchaOptions: {
+            successCb: function () {
+              var fp = '';
+              try { fp = window.getCaptchaWebId ? window.getCaptchaWebId() : ''; } catch (e) { }
+              if (!fp) {
+                try { fp = window.verifySDK && window.verifySDK.getCaptchaWebId ? window.verifySDK.getCaptchaWebId() : ''; } catch (e) { }
+              }
+              if (!fp && state.sms.captcha.conf.fp) fp = state.sms.captcha.conf.fp;
+              if (!fp) { fp = 'verify_' + Date.now(); }
+              replaySms(fp);
+            },
+            closeCb: function () {
+              state.sms.captcha.conf = null;
+              state.sms.status = '已取消滑块验证';
+              state.sms.statusClass = 'err';
+              rerenderLogin();
+            }
+          }
+        });
+        var se = $('#smsStatus');
+        if (se) { se.textContent = '请完成滑块验证'; se.className = 'qr-status'; }
+      } catch (e) {
+        state.sms.captcha.conf = null;
+        state.sms.status = '滑块验证组件加载失败：' + e.message;
+        state.sms.statusClass = 'err';
+        rerenderLogin();
+      }
+    }, function () {
+      state.sms.captcha.conf = null;
+      state.sms.status = '滑块验证组件加载失败，请稍后重试或改用扫码/粘贴 Cookie 登录';
+      state.sms.statusClass = 'err';
+      rerenderLogin();
+    });
+  }
+
+  function replaySms(fp) {
+    var statusEl = $('#smsStatus');
+    if (statusEl) { statusEl.textContent = '验证通过，正在发送验证码…'; statusEl.className = 'qr-status'; }
+    call('sms-send-replay', { mobile: state.sms.mobile, fp: fp }).then(function (r) {
+      state.sms.ticket = r.mobileTicket || '';
+      state.sms.captcha.conf = null;
+      state.sms.status = '验证码已发送，请查收短信';
+      state.sms.statusClass = 'ok';
+      state.sms.countdown = 60;
+      startSmsCountdown();
+      rerenderLogin();
+    }).catch(function (e) {
+      state.sms.captcha.conf = null;
+      state.sms.status = e.message;
+      state.sms.statusClass = 'err';
+      rerenderLogin();
+    });
+  }
+
+  var smsTimer = null;
+  function startSmsCountdown() {
+    if (smsTimer) clearInterval(smsTimer);
+    smsTimer = setInterval(function () {
+      if (state.sms.countdown > 0) {
+        state.sms.countdown--;
+        var b = $('#smsSendBtn');
+        if (b) {
+          if (state.sms.countdown > 0) { b.textContent = state.sms.countdown + 's 后重发'; b.disabled = true; }
+          else { b.textContent = '发送验证码'; b.disabled = false; }
+        }
+        if (state.sms.countdown <= 0) clearInterval(smsTimer);
+      } else {
+        clearInterval(smsTimer);
+      }
+    }, 1000);
+  }
+
+  function smsLoginSubmit() {
+    var mobile = state.sms.mobile.trim();
+    var code = state.sms.code.trim();
+    if (!/^1[3-9]\d{9}$/.test(mobile)) { state.sms.status = '请输入正确的 11 位手机号'; state.sms.statusClass = 'err'; rerenderLogin(); return; }
+    if (!code) { state.sms.status = '请输入验证码'; state.sms.statusClass = 'err'; rerenderLogin(); return; }
+    state.sms.loggingIn = true;
+    state.sms.status = '登录中…';
+    state.sms.statusClass = '';
+    rerenderLogin();
+    call('sms-login', { mobile: mobile, code: code, mobileTicket: state.sms.ticket }).then(function (r) {
+      state.user = r.user;
+      state.loggedIn = true;
+      state.sms.loggingIn = false;
+      state.sms.status = '登录成功：' + r.user.name;
+      state.sms.statusClass = 'ok';
+      state.sms.ticket = '';
+      state.sms.code = '';
+      rerenderLogin();
+    }).catch(function (e) {
+      state.sms.loggingIn = false;
+      state.sms.status = e.message;
+      state.sms.statusClass = 'err';
+      rerenderLogin();
+    });
+  }
+
+  function renderQrText(box, text) {
+    try {
+      if (typeof qrcode !== 'function') throw new Error('no qrcode lib');
+      var qr = qrcode(0, 'M');
+      qr.addData(text);
+      qr.make();
+      var img = el('img');
+      img.src = qr.createDataURL(8, 8);
+      box.appendChild(img);
+    } catch (e) {
+      box.appendChild(el('div', 'placeholder', '二维码内容：' + text));
+    }
+  }
+  function showQrFallback(box) {
+    if (state.qrText) renderQrText(box, state.qrText);
+    else {
+      box.innerHTML = '';
+      box.appendChild(el('div', 'placeholder', '二维码图片加载失败，请刷新'));
+    }
+  }
+
+  function startQr() {
+    state.qrWorking = true;
+    state.qrUrl = null;
+    state.qrText = null;
+    state.qrStatusText = '正在获取二维码…';
+    state.qrStatusClass = '';
+    renderView();
+    call('qr-start', {}).then(function (r) {
+      state.qrSession = r.session || (state.qrSession || 0) + 1;
+      state.qrWorking = false;
+      state.qrUrl = r.qrUrl || null;
+      state.qrText = r.qrText || null;
+      state.qrStatusText = '请使用抖音 / 番茄小说 App 扫码，并在手机上确认登录';
+      renderView();
+    }).catch(function (e) {
+      state.qrWorking = false;
+      state.qrStatusText = e.message;
+      state.qrStatusClass = 'err';
+      renderView();
+    });
+  }
+
+  /* ---------------- 书籍详情 ---------------- */
+  function showBookModal(bookId) {
+    var mask = el('div', 'modal-mask');
+    mask.id = 'bookModal';
+    var modal = el('div', 'modal');
+    modal.appendChild(el('div', 'loading', '加载中…'));
+    mask.appendChild(modal);
+    document.body.appendChild(mask);
+    call('book-detail', { bookId: bookId }).then(function (b) {
+      modal.innerHTML = '';
+      var top = el('div', 'top');
+      var img = el('img', 'cover');
+      if (b.thumb_url) { img.src = b.thumb_url; img.onerror = coverFallback; }
+      else img.style.background = 'linear-gradient(135deg,#ff6b3d,#ff3d2e)';
+      var right = el('div');
+      right.style.flex = '1';
+      right.style.minWidth = '0';
+      right.appendChild(el('div', 'title', b.book_name));
+      var meta = el('div', 'meta');
+      var st = statusText(b.creation_status);
+      var parts = [];
+      if (st) parts.push('状态：' + st);
+      if (b.author) parts.push('作者：' + b.author);
+      if (fmtWord(b.word_number)) parts.push(fmtWord(b.word_number));
+      if (b.serial_count) parts.push(b.serial_count + '章');
+      if (b.score) parts.push('评分：' + b.score);
+      meta.textContent = parts.join(' · ');
+      right.appendChild(meta);
+      top.appendChild(img);
+      top.appendChild(right);
+      modal.appendChild(top);
+      if (b.abstract) modal.appendChild(el('div', 'abstract', b.abstract));
+      var actions = el('div', 'actions');
+      var read = el('button', 'btn', '开始阅读');
+      read.id = 'readBtn';
+      read.dataset.bookId = b.book_id;
+      var shelfBtn = el('button', 'btn secondary', '加入书架');
+      shelfBtn.id = 'shelfAddBtn';
+      shelfBtn.dataset.bookId = b.book_id;
+      actions.appendChild(read);
+      actions.appendChild(shelfBtn);
+      modal.appendChild(actions);
+      state.bookCoverUrl = b.thumb_url || '';
+    }).catch(function (e) {
+      modal.innerHTML = '';
+      modal.appendChild(errBox(e.message));
+    });
+  }
+
+  /* ---------------- 阅读器 ---------------- */
+  function enterReader(bookId, bookTitle) {
+    state.view = 'reader';
+    state.inReader = true;
+    state.readerBookId = bookId;
+    state.readerBookTitle = bookTitle || state.readerBookTitle || '';
+    state.chapter = null;
+    state.pages = [];
+    state.pageIdx = 0;
+    state.chapters = [];
+    state.chapterIdx = -1;
+    state.readerError = null;
+    state.drawer = null;
+    state.settingsOpen = false;
+    render();
+    // 加载目录
+    call('directory', { bookId: bookId }).then(function (d) {
+      state.directory = d;
+      var chapters = [];
+      (d.volumes || []).forEach(function (v) {
+        (v.chapters || []).forEach(function (c) {
+          c.volume_name = v.volume_name;
+          chapters.push(c);
+        });
+      });
+      if (!chapters.length) {
+        (d.allItemIds || []).forEach(function (id, i) { chapters.push({ itemId: id, title: '第' + (i + 1) + '章' }); });
+      }
+      state.chapters = chapters;
+      // 优先从本地书架恢复进度
+      var resume = null;
+      var shelfItem = state.shelfLocal.find(function (i) { return i.bookId === bookId; });
+      if (shelfItem && shelfItem.lastReadItemId) {
+        var idx = chapters.findIndex(function (c) { return c.itemId === shelfItem.lastReadItemId; });
+        if (idx >= 0) resume = { idx: idx, itemId: shelfItem.lastReadItemId };
+      }
+      if (resume) {
+        state.chapterIdx = resume.idx;
+        openChapter(resume.itemId, resume.idx, false);
+      } else if (chapters.length) {
+        state.chapterIdx = 0;
+        openChapter(chapters[0].itemId, 0, false);
+      } else {
+        state.readerError = '目录为空';
+        renderReader();
+      }
+    }).catch(function (e) {
+      state.readerError = e.message;
+      renderReader();
+    });
+  }
+
+  var chapterCache = new Map();
+
+  function openChapter(itemId, idx, needRender) {
+    state.readerLoading = true;
+    state.readerError = null;
+    if (needRender !== false) renderReader();
+    var cached = chapterCache.get(itemId);
+    var p = cached ? Promise.resolve(cached) : call('chapter', { itemId: itemId }).then(function (c) {
+      chapterCache.set(itemId, c);
+      return c;
+    });
+    p.then(function (c) {
+      state.chapter = c;
+      if (idx >= 0) state.chapterIdx = idx;
+      state.pages = paginate(c.paragraphs || []);
+      state.pageIdx = 0;
+      state.activeParagraphIdx = -1;
+      state.readerLoading = false;
+      saveReadingProgress(c);
+      renderReader();
+      prefetchNext(c);
+    }).catch(function (e) {
+      state.readerLoading = false;
+      state.readerError = e.message;
+      renderReader();
+    });
+  }
+
+  function prefetchNext(c) {
+    if (c && c.nextItemId && !chapterCache.has(c.nextItemId)) {
+      setTimeout(function () {
+        call('chapter', { itemId: c.nextItemId }).then(function (nc) { chapterCache.set(nc.itemId, nc); }).catch(function () { /* ignore */ });
+      }, 2500);
+    }
+  }
+
+  function saveReadingProgress(c) {
+    if (!state.readerBookId) return;
+    var idx = state.shelfLocal.findIndex(function (i) { return i.bookId === state.readerBookId; });
+    var item = {
+      bookId: state.readerBookId,
+      title: state.readerBookTitle || c.bookName || state.readerBookId,
+      author: c.author || '',
+      coverUrl: state.bookCoverUrl || (idx >= 0 ? state.shelfLocal[idx].coverUrl : '') || '',
+      addedAt: idx >= 0 ? state.shelfLocal[idx].addedAt : Date.now(),
+      lastReadItemId: c.itemId,
+      lastReadChapterTitle: c.title,
+      lastReadAt: Date.now(),
+    };
+    if (idx >= 0) state.shelfLocal[idx] = item;
+    else state.shelfLocal.unshift(item);
+    call('shelf-local-set', { items: state.shelfLocal }).catch(function () { /* ignore */ });
+    if (state.loggedIn) {
+      call('progress-update', {
+        bookId: state.readerBookId,
+        itemId: c.itemId,
+        order: Number(c.realChapterOrder || c.order || 0),
+      }).catch(function () { /* ignore */ });
+    }
+  }
+
+  function renderReader() {
+    applySettings();
+    var nav = el('div', 'navbar');
+    var back = el('button', 'btn ghost', '‹ 返回');
+    back.id = 'readerBack';
+    nav.appendChild(back);
+    nav.appendChild(el('span', 'brand', '🍅 阅读'));
+    nav.appendChild(el('span', 'spacer'));
+    var catalogBtn = el('button', 'nav-tab', '目录');
+    catalogBtn.id = 'catalogBtn';
+    nav.appendChild(catalogBtn);
+    var chapCmtBtn = el('button', 'nav-tab', '章评');
+    chapCmtBtn.id = 'chapterCommentsBtn';
+    nav.appendChild(chapCmtBtn);
+    var bookCmtBtn = el('button', 'nav-tab', '书评');
+    bookCmtBtn.id = 'bookCommentsBtn';
+    nav.appendChild(bookCmtBtn);
+    var settingsBtn = el('button', 'nav-tab', '设置');
+    settingsBtn.id = 'settingsBtn';
+    nav.appendChild(settingsBtn);
+
+    app.innerHTML = '';
+    app.appendChild(nav);
+    var reader = el('div', 'reader');
+    reader.id = 'reader';
+    // 标题栏
+    var bar = el('div', 'reader-bar');
+    var titles = el('div', 'titles');
+    titles.appendChild(el('div', 'bt', (state.chapter && state.chapter.title) || state.readerBookTitle || '加载中…'));
+    titles.appendChild(el('div', 'bs',
+      (state.readerBookTitle || '') +
+      (state.chapter && state.chapter.realChapterOrder ? ' · 第' + state.chapter.realChapterOrder + '章' : '') +
+      (state.chapter && state.chapter.chapterWordNumber ? ' · ' + fmtWord(state.chapter.chapterWordNumber) : '')));
+    bar.appendChild(titles);
+    reader.appendChild(bar);
+    // 内容
+    var content = el('div', 'reader-content');
+    content.id = 'readerContent';
+    reader.appendChild(content);
+    // 底部
+    var footer = el('div', 'reader-footer');
+    var prevC = el('button', 'btn ghost', '上一章');
+    prevC.id = 'prevChapter';
+    var prevP = el('button', 'btn', '‹ 上一页');
+    prevP.id = 'prevPage';
+    var info = el('div', 'page-info');
+    info.id = 'pageInfo';
+    var nextP = el('button', 'btn', '下一页 ›');
+    nextP.id = 'nextPage';
+    var nextC = el('button', 'btn ghost', '下一章');
+    nextC.id = 'nextChapter';
+    footer.appendChild(prevC);
+    footer.appendChild(prevP);
+    footer.appendChild(info);
+    footer.appendChild(nextP);
+    footer.appendChild(nextC);
+    reader.appendChild(footer);
+    app.appendChild(reader);
+    renderPage();
+
+    if (state.readerLoading) {
+      var ld = el('div', 'reader-loading', '加载中…');
+      ld.id = 'readerLoading';
+      content.appendChild(ld);
+    } else if (state.readerError) {
+      var eb = errBox(state.readerError);
+      eb.className = 'err-box reader-loading';
+      eb.style.position = 'absolute';
+      content.appendChild(eb);
+    }
+    // 目录抽屉
+    if (state.drawer === 'catalog') renderCatalogDrawer(reader);
+    if (state.drawer === 'comments') renderCommentsDrawer(reader);
+    if (state.settingsOpen) renderSettingsPop(reader);
+  }
+
+  /** 分页：把段落列表切分为适合一屏的页 */
+  function paginate(paragraphs) {
+    if (!paragraphs || !paragraphs.length) return [];
+    var content = $('#readerContent');
+    if (!content) return [paragraphs.map(function (p, i) { return { text: p, idx: i }; })];
+    var pageH = content.clientHeight - 22;
+    if (pageH < 100) pageH = 400;
+    // 测量容器：与真实页同宽同样式
+    var wrap = el('div', 'page-wrap');
+    wrap.style.position = 'absolute';
+    wrap.style.visibility = 'hidden';
+    wrap.style.pointerEvents = 'none';
+    wrap.style.left = '0';
+    wrap.style.right = '0';
+    wrap.style.top = '0';
+    var page = el('div', 'page');
+    page.style.minHeight = '0';
+    page.style.height = 'auto';
+    wrap.appendChild(page);
+    content.appendChild(wrap);
+
+    var paras = paragraphs.map(function (t, i) { return { text: t, idx: i }; });
+    var pages = [];
+    var fits = function (list) {
+      page.innerHTML = '';
+      list.forEach(function (p) {
+        var pe = el('p', 'para-click');
+        pe.textContent = p.text;
+        page.appendChild(pe);
+      });
+      return page.scrollHeight <= pageH;
+    };
+    var fitsChar = function (text) {
+      page.innerHTML = '';
+      var pe = el('p', 'para-click');
+      pe.textContent = text;
+      page.appendChild(pe);
+      return page.scrollHeight <= pageH;
+    };
+    var i = 0;
+    var n = paras.length;
+    while (i < n) {
+      var lo = i + 1, hi = n, best = i;
+      while (lo <= hi) {
+        var mid = (lo + hi) >> 1;
+        if (fits(paras.slice(i, mid))) { best = mid; lo = mid + 1; }
+        else hi = mid - 1;
+      }
+      if (best > i) {
+        pages.push(paras.slice(i, best));
+        i = best;
+      } else {
+        // 单个段落超长：按字符切分
+        var text = paras[i].text;
+        var idx = paras[i].idx;
+        var start = 0;
+        while (start < text.length) {
+          var a = start + 1, b = text.length, bestC = start;
+          while (a <= b) {
+            var midc = (a + b) >> 1;
+            if (fitsChar(text.slice(start, midc))) { bestC = midc; a = midc + 1; }
+            else b = midc - 1;
+          }
+          if (bestC <= start) bestC = start + 1;
+          pages.push([{ text: text.slice(start, bestC), idx: idx }]);
+          start = bestC;
+        }
+        i++;
+      }
+    }
+    wrap.remove();
+    return pages;
+  }
+
+  function renderPage() {
+    var content = $('#readerContent');
+    if (!content) return;
+    // 清除非页面元素
+    $$('.page-wrap', content).forEach(function (w) { w.remove(); });
+    $$('.reader-loading', content).forEach(function (w) { w.remove(); });
+    var pages = state.pages;
+    if (!pages.length) {
+      var eb = errBox('章节内容为空');
+      eb.className = 'err-box reader-loading';
+      eb.style.position = 'absolute';
+      content.appendChild(eb);
+      return;
+    }
+    var pIdx = Math.max(0, Math.min(state.pageIdx, pages.length - 1));
+    state.pageIdx = pIdx;
+    var wrap = el('div', 'page-wrap');
+    wrap.id = 'pageWrap';
+    var page = el('div', 'page');
+    var cur = pages[pIdx] || [];
+    cur.forEach(function (p) {
+      var pe = el('p', 'para-click');
+      pe.textContent = p.text;
+      pe.dataset.paraIdx = String(p.idx);
+      page.appendChild(pe);
+    });
+    wrap.appendChild(page);
+    content.appendChild(wrap);
+    wrap.scrollTop = 0;
+    var info = $('#pageInfo');
+    if (info) info.textContent = (pIdx + 1) + ' / ' + pages.length;
+  }
+
+  function navPage(delta) {
+    if (state.readerLoading || !state.pages.length) return;
+    var next = state.pageIdx + delta;
+    if (next < 0) {
+      prevChapter();
+      return;
+    }
+    if (next >= state.pages.length) {
+      nextChapter();
+      return;
+    }
+    state.pageIdx = next;
+    renderPage();
+  }
+
+  function prevChapter() {
+    if (state.chapterIdx > 0 && state.chapters.length) {
+      state.chapterIdx--;
+      openChapter(state.chapters[state.chapterIdx].itemId, state.chapterIdx);
+    } else if (state.chapter && state.chapter.preItemId) {
+      openChapter(state.chapter.preItemId, -1);
+    }
+  }
+
+  function nextChapter() {
+    if (state.chapterIdx >= 0 && state.chapterIdx < state.chapters.length - 1) {
+      state.chapterIdx++;
+      openChapter(state.chapters[state.chapterIdx].itemId, state.chapterIdx);
+    } else if (state.chapter && state.chapter.nextItemId) {
+      openChapter(state.chapter.nextItemId, -1);
+    }
+  }
+
+  /* ---------------- 目录抽屉 ---------------- */
+  function renderCatalogDrawer(root) {
+    var drawer = el('div', 'drawer');
+    drawer.id = 'catalogDrawer';
+    var head = el('div', 'drawer-head');
+    head.appendChild(el('span', null, '目录（' + (state.chapters.length || 0) + '章）'));
+    var close = el('button', null, '✕');
+    close.id = 'closeDrawer';
+    head.appendChild(close);
+    drawer.appendChild(head);
+    var body = el('div', 'drawer-body');
+    var vols = state.directory ? state.directory.volumes : [];
+    if (vols.length) {
+      vols.forEach(function (v) {
+        body.appendChild(el('div', 'volume', v.volume_name || '正文'));
+        v.chapters.forEach(function (c) {
+          var d = el('div', 'chap' + (c.itemId === (state.chapter && state.chapter.itemId) ? ' active' : ''),
+            (c.needPay ? '🔒 ' : '') + c.title);
+          d.dataset.itemId = c.itemId;
+          body.appendChild(d);
+        });
+      });
+    } else {
+      state.chapters.forEach(function (c) {
+        var d = el('div', 'chap' + (c.itemId === (state.chapter && state.chapter.itemId) ? ' active' : ''), c.title);
+        d.dataset.itemId = c.itemId;
+        body.appendChild(d);
+      });
+    }
+    drawer.appendChild(body);
+    root.appendChild(drawer);
+    requestAnimationFrame(function () { drawer.classList.add('open'); });
+  }
+
+  /* ---------------- 评论 ---------------- */
+  function openComments(kind, paraIdx) {
+    state.drawer = 'comments';
+    state.commentsKind = kind || 'chapter';
+    state.comments = [];
+    state.commentsLoading = true;
+    state.commentsError = null;
+    if (paraIdx !== undefined) state.activeParagraphIdx = paraIdx;
+    renderReader();
+    loadComments();
+  }
+
+  function loadComments() {
+    if (state.commentsKind !== 'book' && !(state.chapter && state.chapter.itemId)) {
+      state.commentsLoading = false;
+      state.commentsError = '请先打开章节';
+      renderCommentsDrawer($('#reader'));
+      return;
+    }
+    var p = null;
+    if (state.commentsKind === 'book') {
+      p = call('book-comments', { bookId: state.readerBookId, limit: 12 });
+    } else if (state.commentsKind === 'paragraph') {
+      p = call('paragraph-comments', {
+        bookId: state.readerBookId,
+        itemId: state.chapter && state.chapter.itemId,
+        paragraphIndex: state.activeParagraphIdx,
+      }).then(function (r) { return { comments: r.comments, total: r.comments.length }; });
+    } else {
+      p = call('chapter-comments', {
+        bookId: state.readerBookId,
+        itemId: state.chapter && state.chapter.itemId,
+        page: 0,
+      });
+    }
+    p.then(function (r) {
+      state.comments = (r && r.comments) || [];
+      state.commentsLoading = false;
+      renderCommentsDrawer($('#reader'));
+    }).catch(function (e) {
+      state.commentsLoading = false;
+      state.commentsError = e.message;
+      renderCommentsDrawer($('#reader'));
+    });
+  }
+
+  function renderCommentsDrawer(root) {
+    if (!root) return;
+    var old = $('#commentsDrawer');
+    if (old) old.remove();
+    var drawer = el('div', 'drawer comment-drawer');
+    drawer.id = 'commentsDrawer';
+    var head = el('div', 'drawer-head');
+    var kindLabel = { chapter: '章评', paragraph: '段评', book: '书评' }[state.commentsKind] || '评论';
+    var title = el('span', null, kindLabel + (state.commentsKind === 'paragraph' && state.activeParagraphIdx >= 0 ? ' · 第' + (state.activeParagraphIdx + 1) + '段' : ''));
+    head.appendChild(title);
+    var close = el('button', null, '✕');
+    close.id = 'closeDrawer';
+    head.appendChild(close);
+    drawer.appendChild(head);
+    // tabs
+    var tabs = el('div', 'comment-tabs');
+    var mkTab = function (kind, label) {
+      var c = el('button', 'chip' + (state.commentsKind === kind ? ' active' : ''), label);
+      c.dataset.cmtKind = kind;
+      return c;
+    };
+    tabs.appendChild(mkTab('chapter', '章评'));
+    if (state.activeParagraphIdx >= 0) tabs.appendChild(mkTab('paragraph', '段评'));
+    tabs.appendChild(mkTab('book', '书评'));
+    drawer.appendChild(tabs);
+    var body = el('div', 'drawer-body');
+    if (state.commentsLoading) {
+      body.appendChild(el('div', 'loading', '加载评论中…'));
+    } else if (state.commentsError) {
+      var eb = errBox(state.commentsError);
+      body.appendChild(eb);
+    } else if (!state.comments.length) {
+      body.appendChild(el('div', 'empty', '暂无评论'));
+    } else {
+      state.comments.forEach(function (c) {
+        var item = el('div', 'comment-item');
+        var head2 = el('div', 'c-head');
+        if (c.avatar) {
+          var av = el('img', 'c-avatar');
+          av.src = c.avatar;
+          av.onerror = function () { av.style.display = 'none'; };
+          head2.appendChild(av);
+        }
+        head2.appendChild(el('span', 'c-name', c.nick_name || '匿名'));
+        head2.appendChild(el('span', 'c-time', fmtTime(c.create_time)));
+        item.appendChild(head2);
+        item.appendChild(el('div', 'c-text', c.text));
+        var stat = [];
+        if (c.book_title) stat.push('评论《' + c.book_title + '》');
+        if (c.score) stat.push('评分 ' + c.score);
+        if (c.digg_count) stat.push('👍 ' + fmtCount(c.digg_count));
+        if (c.reply_count) stat.push('💬 ' + fmtCount(c.reply_count));
+        if (stat.length) item.appendChild(el('div', 'c-stat', stat.join(' · ')));
+        body.appendChild(item);
+      });
+    }
+    drawer.appendChild(body);
+    root.appendChild(drawer);
+    requestAnimationFrame(function () { drawer.classList.add('open'); });
+  }
+
+  /* ---------------- 设置 ---------------- */
+  function renderSettingsPop(root) {
+    var old = $('#settingsPop');
+    if (old) old.remove();
+    var pop = el('div', 'settings-pop');
+    pop.id = 'settingsPop';
+    var s = state.settings;
+    var row1 = el('div', 'row');
+    row1.appendChild(el('span', null, '字号'));
+    var fs = el('input');
+    fs.type = 'range';
+    fs.min = '13';
+    fs.max = '28';
+    fs.step = '1';
+    fs.value = String(s.fontSize);
+    fs.id = 'fontSizeRange';
+    row1.appendChild(fs);
+    pop.appendChild(row1);
+    var row2 = el('div', 'row');
+    row2.appendChild(el('span', null, '行距'));
+    var lh = el('input');
+    lh.type = 'range';
+    lh.min = '1.4';
+    lh.max = '2.6';
+    lh.step = '0.1';
+    lh.value = String(s.lineHeight);
+    lh.id = 'lineHeightRange';
+    row2.appendChild(lh);
+    pop.appendChild(row2);
+    var row3 = el('div', 'row');
+    row3.appendChild(el('span', null, '主题'));
+    var sw = el('div', 'theme-switch');
+    [['sepia', '羊皮纸'], ['day', '白天'], ['night', '夜间']].forEach(function (t) {
+      var c = el('button', 'chip' + (s.theme === t[0] ? ' active' : ''), t[1]);
+      c.dataset.theme = t[0];
+      sw.appendChild(c);
+    });
+    row3.appendChild(sw);
+    pop.appendChild(row3);
+    var hint = el('div', 'cookie-hint', '键盘：←/→ 翻页 · Ctrl+←/→ 切换章节 · 点击段落实行可查看段评');
+    pop.appendChild(hint);
+    root.appendChild(pop);
+  }
+
+  /* ---------------- 事件委托 ---------------- */
+  document.addEventListener('click', function (ev) {
+    var t = ev.target;
+    var nav = t.closest ? t.closest('[data-nav]') : null;
+    if (nav) {
+      var target = nav.dataset.nav;
+      if (target === 'login') {
+        state.view = 'login';
+        render();
+        return;
+      }
+      if (state.view === 'reader' && target !== 'bookstore') {
+        // 阅读器内切换到其他视图
+        state.inReader = false;
+        state.view = target;
+        render();
+        return;
+      }
+      state.view = target;
+      renderView();
+      if (target === 'shelf') renderShelf($('#view'));
+      if (target === 'bookstore' && !state.rankBooks.length && !state.rankLoading) loadRank(true);
+      return;
+    }
+    var gender = t.closest ? t.closest('[data-gender]') : null;
+    if (gender) {
+      state.rankGender = gender.dataset.gender;
+      state.rankCat = '';
+      loadRank(true);
+      return;
+    }
+    var rankType = t.closest ? t.closest('[data-rankType]') : null;
+    if (rankType) {
+      state.rankType = Number(rankType.dataset.rankType);
+      loadRank(true);
+      return;
+    }
+    var cat = t.closest ? t.closest('[data-cat]') : null;
+    if (cat) {
+      state.rankCat = cat.dataset.cat;
+      loadRank(true);
+      return;
+    }
+    var more = t.closest ? t.closest('#rankMore') : null;
+    if (more) { loadRank(false); return; }
+    var searchMore = t.closest ? t.closest('#searchMore') : null;
+    if (searchMore) { doSearch(false); return; }
+    var card = t.closest ? t.closest('.book-card') : null;
+    if (card) {
+      if (IS_SIDEBAR) { openBookInEditor(card.dataset.bookId); } else { showBookModal(card.dataset.bookId); }
+      return;
+    }
+    var row = t.closest ? t.closest('.search-list .row') : null;
+    if (row) {
+      if (IS_SIDEBAR) { openBookInEditor(row.dataset.bookId); } else { showBookModal(row.dataset.bookId); }
+      return;
+    }
+    var shelfCover = t.closest ? t.closest('.shelf-item [data-bookId]') : null;
+    if (shelfCover && state.view === 'shelf') {
+      var bookId = shelfCover.dataset.bookId;
+      if (IS_SIDEBAR) { openBookInEditor(bookId); return; }
+      var local = state.shelfLocal.find(function (i) { return i.bookId === bookId; });
+      enterReader(bookId, local ? local.title : bookId);
+      return;
+    }
+    var rm = t.closest ? t.closest('[data-remove]') : null;
+    if (rm && state.view === 'shelf') {
+      ev.stopPropagation();
+      call('shelf-remove', { bookId: rm.dataset.remove }).then(function () {
+        state.shelfLocal = state.shelfLocal.filter(function (i) { return i.bookId !== rm.dataset.remove; });
+        renderShelf($('#view'));
+      });
+      return;
+    }
+    // 书籍弹窗
+    if (t.id === 'readBtn') {
+      document.getElementById('bookModal') && document.getElementById('bookModal').remove();
+      if (IS_SIDEBAR) {
+        openBookInEditor(t.dataset.bookId);
+      } else {
+        enterReader(t.dataset.bookId, '');
+      }
+      return;
+    }
+    if (t.id === 'shelfAddBtn') {
+      t.disabled = true;
+      t.textContent = '添加中…';
+      call('shelf-add', { bookId: t.dataset.bookId }).then(function (r) {
+        t.textContent = r.remoteOk ? '已加入（含云端）' : '已加入本地书架';
+        refreshShelfCache();
+      }).catch(function (e) {
+        t.textContent = '添加失败：' + e.message;
+      });
+      return;
+    }
+    var modalMask = t.closest ? t.closest('#bookModal') : null;
+    if (modalMask && t === modalMask) modalMask.remove();
+
+    // 阅读器
+    if (state.view === 'reader') {
+      if (t.id === 'readerBack') {
+        state.inReader = false;
+        state.view = 'bookstore';
+        render();
+        if (!state.rankBooks.length && !state.rankLoading) loadRank(true);
+        return;
+      }
+      if (t.id === 'catalogBtn') {
+        state.drawer = state.drawer === 'catalog' ? null : 'catalog';
+        state.settingsOpen = false;
+        renderReader();
+        return;
+      }
+      if (t.id === 'chapterCommentsBtn') {
+        openComments('chapter');
+        return;
+      }
+      if (t.id === 'bookCommentsBtn') {
+        openComments('book');
+        return;
+      }
+      if (t.id === 'settingsBtn') {
+        state.settingsOpen = !state.settingsOpen;
+        state.drawer = null;
+        renderReader();
+        return;
+      }
+      if (t.id === 'closeDrawer') {
+        state.drawer = null;
+        renderReader();
+        return;
+      }
+      var cmtTab = t.closest ? t.closest('[data-cmtKind]') : null;
+      if (cmtTab) {
+        state.commentsKind = cmtTab.dataset.cmtKind;
+        state.comments = [];
+        state.commentsLoading = true;
+        state.commentsError = null;
+        renderReader();
+        loadComments();
+        return;
+      }
+      var chap = t.closest ? t.closest('.drawer .chap') : null;
+      if (chap) {
+        var itemId = chap.dataset.itemId;
+        var idx = state.chapters.findIndex(function (c) { return c.itemId === itemId; });
+        state.chapterIdx = idx;
+        state.drawer = null;
+        state.pageIdx = 0;
+        openChapter(itemId, idx);
+        return;
+      }
+      if (t.id === 'prevPage') { navPage(-1); return; }
+      if (t.id === 'nextPage') { navPage(1); return; }
+      if (t.id === 'prevChapter') { prevChapter(); return; }
+      if (t.id === 'nextChapter') { nextChapter(); return; }
+      var para = t.closest ? t.closest('p[data-paraIdx]') : null;
+      if (para) {
+        var pIdx = Number(para.dataset.paraIdx);
+        // 点击段落 → 查看段评
+        $$('p[data-paraIdx]').forEach(function (p) { p.classList.remove('active'); });
+        para.classList.add('active');
+        openComments('paragraph', pIdx);
+        return;
+      }
+      var themeChip = t.closest ? t.closest('[data-theme]') : null;
+      if (themeChip) {
+        state.settings.theme = themeChip.dataset.theme;
+        saveSettings();
+        renderReader();
+        return;
+      }
+    }
+
+    // 登录
+    if (t.id === 'smsTabBtn') { state.sms.tab = 'sms'; renderView(); return; }
+    if (t.id === 'qrTabBtn') { state.sms.tab = 'qr'; renderView(); return; }
+    if (t.id === 'smsSendBtn') { sendSms(); return; }
+    if (t.id === 'smsLoginBtn') { smsLoginSubmit(); return; }
+    if (t.id === 'qrStart') { startQr(); return; }
+    if (t.id === 'qrRefresh') { startQr(); return; }
+    if (t.id === 'cookieImport') {
+      var val = $('#cookieInput') ? $('#cookieInput').value.trim() : '';
+      if (!val) return;
+      var btn = t;
+      btn.disabled = true;
+      btn.textContent = '导入中…';
+      call('cookie-import', { cookie: val }).then(function (r) {
+        state.user = r.user;
+        state.loggedIn = true;
+        state.qrStatusText = '登录成功：' + r.user.name;
+        state.qrStatusClass = 'ok';
+        render();
+      }).catch(function (e) {
+        btn.disabled = false;
+        btn.textContent = '导入 Cookie 登录';
+        state.qrStatusText = e.message;
+        state.qrStatusClass = 'err';
+        rerenderLogin();
+      });
+      return;
+    }
+    if (t.id === 'logoutBtn') {
+      call('logout', {}).then(function () {
+        state.user = null;
+        state.loggedIn = false;
+        render();
+      });
+      return;
+    }
+  });
+
+  // 阅读器内点击内容区空白处：收起抽屉
+  document.addEventListener('click', function (ev) {
+    if (state.view !== 'reader' || !state.drawer) return;
+    var d = $('#catalogDrawer') || $('#commentsDrawer');
+    if (d && !d.contains(ev.target)) {
+      var isBar = ev.target.closest && (ev.target.closest('.reader-bar') || ev.target.closest('.reader-footer') || ev.target.closest('.navbar'));
+      if (!isBar) {
+        state.drawer = null;
+        renderReader();
+      }
+    }
+  });
+
+  // 设置控件 & 登录输入
+  document.addEventListener('input', function (ev) {
+    var t = ev.target;
+    if (t.id === 'smsMobile') state.sms.mobile = t.value;
+    if (t.id === 'smsCode') state.sms.code = t.value;
+    if (t.id === 'fontSizeRange') {
+      state.settings.fontSize = Number(t.value);
+      saveSettings();
+      if (state.view === 'reader') {
+        state.pages = paginate(state.chapter ? state.chapter.paragraphs : []);
+        state.pageIdx = Math.min(state.pageIdx, Math.max(0, state.pages.length - 1));
+        renderReader();
+      }
+    }
+    if (t.id === 'lineHeightRange') {
+      state.settings.lineHeight = Number(t.value);
+      saveSettings();
+      if (state.view === 'reader') {
+        state.pages = paginate(state.chapter ? state.chapter.paragraphs : []);
+        state.pageIdx = Math.min(state.pageIdx, Math.max(0, state.pages.length - 1));
+        renderReader();
+      }
+    }
+  });
+
+  function saveSettings() {
+    call('settings-set', { settings: state.settings }).catch(function () { /* ignore */ });
+  }
+
+  // 键盘
+  document.addEventListener('keydown', function (ev) {
+    if (state.view !== 'reader') return;
+    if (ev.target && (ev.target.tagName === 'INPUT' || ev.target.tagName === 'TEXTAREA')) return;
+    var ctrl = ev.ctrlKey || ev.metaKey;
+    if (ev.key === 'ArrowLeft' || ev.key === 'PageUp') { ev.preventDefault(); navPage(-1); }
+    else if (ev.key === 'ArrowRight' || ev.key === 'PageDown' || ev.key === ' ') { ev.preventDefault(); navPage(1); }
+    else if (ev.key === 'Home') { ev.preventDefault(); state.pageIdx = 0; renderPage(); }
+    else if (ev.key === 'End') { ev.preventDefault(); state.pageIdx = state.pages.length - 1; renderPage(); }
+    else if (ctrl && ev.key === 'ArrowLeft') { ev.preventDefault(); prevChapter(); }
+    else if (ctrl && ev.key === 'ArrowRight') { ev.preventDefault(); nextChapter(); }
+    else if (ev.key === 'Escape') {
+      if (state.drawer) { state.drawer = null; renderReader(); }
+      else if (state.settingsOpen) { state.settingsOpen = false; renderReader(); }
+    }
+  });
+
+  /* ---------------- 消息监听 ---------------- */
+  window.addEventListener('message', function (ev) {
+    var m = ev.data;
+    if (!m) return;
+    if (m.type === 'resp') {
+      var p = pending.get(m.id);
+      if (p) {
+        pending.delete(m.id);
+        if (m.ok) p.resolve(m.data);
+        else p.reject(new Error(m.error || '未知错误'));
+      }
+      return;
+    }
+    if (m.type === 'init') {
+      state.user = m.user;
+      state.loggedIn = !!m.loggedIn;
+      if (m.settings) state.settings = Object.assign(state.settings, m.settings);
+      state.view = state.view || 'bookstore';
+      render();
+      if (state.view === 'bookstore' && !state.rankBooks.length && !state.rankLoading) loadRank(true);
+      return;
+    }
+    if (m.type === 'nav') {
+      state.view = m.view;
+      state.inReader = false;
+      render();
+      if (m.view === 'bookstore' && !state.rankBooks.length && !state.rankLoading) loadRank(true);
+      if (m.view === 'shelf') renderShelf($('#view'));
+      return;
+    }
+    if (m.type === 'login-changed') {
+      state.user = m.user;
+      state.loggedIn = !!m.loggedIn;
+      saveState();
+      render();
+      if (state.view === 'shelf') renderShelf($('#view'));
+      return;
+    }
+    if (m.type === 'qr-status') {
+      // 只接受当前会话的状态
+      if (m.session !== undefined && m.session !== state.qrSession) return;
+      var s = m.status || {};
+      state.qrStatusText = s.message || '';
+      state.qrStatusClass = s.stage === 'success' ? 'ok' : (s.stage === 'error' ? 'err' : '');
+      if (s.stage === 'waiting' && s.qrUrl && !state.qrUrl) {
+        state.qrUrl = s.qrUrl;
+        state.qrText = s.qrText || state.qrText;
+      }
+      if (state.view === 'login') {
+        var statusEl = $('#qrStatus');
+        if (statusEl) {
+          statusEl.textContent = state.qrStatusText;
+          statusEl.className = 'qr-status' + (state.qrStatusClass ? ' ' + state.qrStatusClass : '');
+        }
+        if (s.stage === 'success') {
+          // 登录完成会收到 login-changed，这里只更新提示
+          state.qrWorking = false;
+        }
+      }
+      return;
+    }
+    if (m.type === 'open-book') {
+      showBookModal(m.bookId);
+      return;
+    }
+    if (m.type === 'open-book-reader') {
+      // 侧边栏/命令请求：直接在阅读器中打开书籍
+      if (IS_SIDEBAR) {
+        // 侧边栏收到此消息说明面板已打开，这里无操作（面板处理）
+      } else {
+        enterReader(m.bookId, '');
+      }
+      return;
+    }
+  });
+
+  /* ---------------- 工具 ---------------- */
+  function errBox(message) {
+    var box = el('div', 'err-box');
+    box.textContent = message || '操作失败';
+    return box;
+  }
+
+  function refreshShelfCache() {
+    call('shelf-local-get', {}).then(function (items) {
+      state.shelfLocal = items || [];
+    }).catch(function () { /* ignore */ });
+  }
+
+  // 初始渲染
+  applySettings();
+  render();
+  call('login-status', {}).then(function (r) {
+    state.user = r.user;
+    state.loggedIn = !!r.loggedIn;
+    render();
+    if (state.view === 'bookstore' && !state.rankBooks.length && !state.rankLoading) loadRank(true);
+  }).catch(function () { /* ignore */ });
+  call('settings-get', {}).then(function (s) {
+    if (s) { state.settings = Object.assign(state.settings, s); applySettings(); }
+  }).catch(function () { /* ignore */ });
+})();

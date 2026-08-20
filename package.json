@@ -1,0 +1,105 @@
+{
+  "name": "fanqie-novel",
+  "displayName": "番茄小说",
+  "description": "🍅 番茄小说阅读器\n在 VS Code 里直接阅读番茄小说：抖音扫码登录、书城（排行榜/分类）、搜索、书架、阅读器（上下翻页/字号主题）、章评/段评。",
+  "version": "1.1.0",
+  "publisher": "local",
+  "license": "MIT",
+  "icon": "media/icon.png",
+  "engines": {
+    "vscode": "^1.90.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "keywords": [
+    "fanqie",
+    "novel",
+    "番茄小说",
+    "reader",
+    "reading"
+  ],
+  "activationEvents": [],
+  "main": "./out/extension.js",
+  "contributes": {
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "fanqie",
+          "title": "番茄小说",
+          "icon": "media/fanqie.svg"
+        }
+      ]
+    },
+    "views": {
+      "fanqie": [
+        {
+          "id": "fanqie.main",
+          "name": "番茄小说",
+          "type": "webview"
+        }
+      ]
+    },
+    "commands": [
+      {
+        "command": "fanqie.open",
+        "title": "番茄小说：打开阅读器",
+        "icon": "$(book)"
+      },
+      {
+        "command": "fanqie.search",
+        "title": "番茄小说：搜索书籍",
+        "icon": "$(search)"
+      },
+      {
+        "command": "fanqie.login",
+        "title": "番茄小说：扫码登录",
+        "icon": "$(account)"
+      },
+      {
+        "command": "fanqie.openBook",
+        "title": "番茄小说：按书籍 ID 打开",
+        "icon": "$(link)"
+      }
+    ],
+    "keybindings": [
+      {
+        "command": "fanqie.open",
+        "key": "ctrl+alt+shift+n",
+        "mac": "cmd+alt+shift+n"
+      }
+    ],
+    "menus": {
+      "commandPalette": [
+        {
+          "command": "fanqie.open",
+          "when": "true"
+        },
+        {
+          "command": "fanqie.search",
+          "when": "true"
+        },
+        {
+          "command": "fanqie.login",
+          "when": "true"
+        },
+        {
+          "command": "fanqie.openBook",
+          "when": "true"
+        }
+      ]
+    }
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run compile",
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "package": "vsce package --no-dependencies --allow-missing-repository"
+  },
+  "devDependencies": {
+    "@types/node": "^20.14.0",
+    "@types/vscode": "^1.90.0",
+    "@vscode/vsce": "^3.9.2",
+    "typescript": "^5.5.0"
+  }
+}
