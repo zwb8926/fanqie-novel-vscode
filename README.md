@@ -2,41 +2,8 @@
 
 在 VS Code 里直接阅读[番茄小说](https://fanqienovel.com/)：抖音扫码登录、书城（排行榜/分类）、搜索、书架、阅读器（上下翻页/字号主题）、章评/段评。
 
-## ✨ 功能
+🌐 项目地址：https://github.com/zwb8926/fanqie-novel-vscode
 
-| 功能 | 说明 |
-| --- | --- |
-| 🔑 扫码登录 | 抖音 / 番茄 App 扫码登录（官网同源接口，稳定可用） |
-| 📚 书城 | 男频/女频 + 推荐/热读/新书/完结/更新榜单 + 37 个分类 |
-| 🔍 搜索 | 按书名/作者搜索，分页加载 |
-| 📖 书架 | 本地书架（离线可用）+ 登录后云端书架同步 |
-| 📄 阅读器 | 上下翻页（键盘 ←/→、PgUp/PgDn、空格）、章节切换（Ctrl+←/→）、字号/行距/主题、目录抽屉、进度记忆 |
-| 💬 章评 / 段评 / 书评 | 书评走官网 SEO 评论页（免登录）；章评/段评走番茄 App 接口（尽力而为，受网络环境限制） |
-| 🛡️ 数据兜底 | 接口被风控时自动降级到官网静态页（SSR），无需登录也能读到免费章节 |
-| 🔓 字体反爬解密 | 章节正文的 PUA 字体加密自动解密（动态字体解析 + 内置字符表） |
-
-## 🚀 快速开始
-
-### 方式一：源码运行（开发调试）
-
-```bash
-npm install
-npm run compile
-```
-
-在 VS Code 中按 `F5`（需要 `.vscode/launch.json`，已内置）启动「扩展开发宿主」，然后：
-
-- 命令面板（`Ctrl+Shift+P`）→ `番茄小说：打开阅读器`
-- 或按快捷键 `Ctrl+Alt+Shift+N`
-
-### 方式二：打包安装
-
-```bash
-npm install
-npm run package        # 生成 fanqie-novel-<版本>.vsix（如 1.0.0）
-```
-
-安装生成的 `.vsix`：VS Code 扩展面板 → `...` → 从 VSIX 安装。
 
 ## 📖 使用说明
 
@@ -56,16 +23,6 @@ npm run package        # 生成 fanqie-novel-<版本>.vsix（如 1.0.0）
 - 点击正文中的**某个段落**可查看该段**段评**；顶部「章评」「书评」查看章节/书籍评论；
 - 阅读器右上角「设置」调整字号、行距、主题（羊皮纸/白天/夜间）；
 - 阅读进度自动保存在本地书架，登录后同步到云端。
-
-## 🧩 技术说明
-
-- **纯 Node 实现，零运行时依赖**：网络层自带 Cookie Jar（手动跟随重定向、逐跳捕获 Set-Cookie）；
-- **数据源分层**（全部为番茄官方接口/页面，非第三方聚合）：
-  1. Web API：搜索 `/api/author/search/search_book/v1`、目录 `/api/reader/directory/detail?bookId=`、章节 `/api/reader/full?itemId=`、排行 `/api/rank/category/list`、书架 `/reading/bookapi/bookshelf/*`、用户 `/api/user/info/v2`；
-  2. SSR 降级：`/page/{bookId}`、`/reader/{itemId}`、`/comment/{bookId}-{commentId}` 的 `__INITIAL_STATE__`（无需登录、无签名）；
-- **登录**：抖音 passport 流程（`get_qrcode` → `check_qrconnect` 轮询 → 跟随 `redirect_url` 捕获 Cookie），同一 Cookie Jar 贯穿登录与业务请求；Cookie 存于 VS Code SecretStorage；
-- **字体解密**：解析字体 WOFF2（brotli）+ CFF 字符集，由字形名 `gidXXXXX` 还原虚拟 gid，再查内置字符表（`src/api/fontmap.json`，362 个常用字，源自开源社区对字体字符集顺序的分析）；
-- **章评/段评**：番茄 App 接口族（`reading.snssdk.com` 等），携带设备参数尽力请求；网页端未开放章评/段评，若被风控会给出明确提示。
 
 ## ⚠️ 已知限制
 
