@@ -1404,19 +1404,6 @@
     }
   });
 
-  // 阅读器内点击内容区空白处：收起抽屉
-  document.addEventListener('click', function (ev) {
-    if (state.view !== 'reader' || !state.drawer) return;
-    var d = $('#catalogDrawer') || $('#commentsDrawer');
-    if (d && !d.contains(ev.target)) {
-      var isBar = ev.target.closest && (ev.target.closest('.reader-bar') || ev.target.closest('.reader-footer') || ev.target.closest('.navbar'));
-      if (!isBar) {
-        state.drawer = null;
-        renderReader();
-      }
-    }
-  });
-
   // 设置控件 & 登录输入
   document.addEventListener('input', function (ev) {
     var t = ev.target;
