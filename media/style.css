@@ -200,18 +200,31 @@ body {
 .reader { position: relative; flex: 1; min-height: 0; display: flex; flex-direction: column; background: var(--reader-bg); }
 .reader.immersive { cursor: default; }
 .reader-bar {
-  display: flex; align-items: center; gap: 10px; padding: 8px 12px;
+  display: flex; align-items: center; gap: 6px; padding: 6px 12px;
   background: var(--reader-bg); border-bottom: 1px solid var(--border); z-index: 30;
 }
 .reader-bar .btn { padding: 5px 10px; font-size: 12px; background: transparent; color: var(--reader-fg); border: 1px solid var(--border); border-radius: 6px; }
 .reader-bar .btn:hover { border-color: var(--accent); color: var(--accent); }
-.reader-bar .titles { flex: 1; min-width: 0; }
-.reader-bar .bt { font-weight: 600; font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.reader-bar .titles { flex: 1; min-width: 0; text-align: center; }
+.reader-bar .bt { font-weight: 600; font-size: 14px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .reader-bar .bs { font-size: 11px; color: var(--fg2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-/* 沉浸式：极简横条（只显示章节名 + 书名·第X章），不占翻页区，可点中间呼出/隐藏完整工具栏 */
-.reader-bar.minimal { padding: 6px 14px; border-bottom: none; opacity: 0.85; cursor: pointer; }
+/* 顶栏按钮组（左翻页组 / 右翻页组 / 工具组） */
+.reader-bar-group { display: flex; align-items: center; gap: 2px; flex: 0 0 auto; }
+/* 秃瓢图标按钮：顶栏所有翻页 + 工具按钮（hover 灰底高亮 + 原生 title 弹 tips） */
+.reader-bar-icon {
+  background: transparent; border: 0; color: var(--reader-fg);
+  width: 28px; height: 28px; padding: 0; border-radius: 6px;
+  font-size: 16px; line-height: 1; cursor: pointer; opacity: 0.72;
+  display: inline-flex; align-items: center; justify-content: center;
+  transition: background 0.12s, opacity 0.12s, color 0.12s;
+}
+.reader-bar-icon:hover { background: rgba(127,127,127,0.14); opacity: 1; }
+.reader-bar-icon:active { background: rgba(127,127,127,0.24); }
+.reader-bar-icon[disabled] { opacity: 0.4; cursor: default; }
+/* 沉浸式：极简横条 */
+.reader-bar.minimal { padding: 4px 10px; border-bottom: none; opacity: 0.9; }
 .reader-bar.minimal:hover { opacity: 1; }
-.reader-bar.minimal .bt { font-size: 13px; }
+.reader-bar.minimal .reader-bar-icon { width: 24px; height: 24px; font-size: 14px; }
 .reader-bar-mini-spacer { flex: 1; }
 .reader-bar-more { background: transparent; border: 0; color: var(--fg2); cursor: pointer; font-size: 14px; padding: 0 4px; }
 .reader-bar-more:hover { color: var(--accent); }

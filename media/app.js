@@ -834,71 +834,82 @@
       nav.appendChild(back);
       nav.appendChild(el('span', 'brand', '🍅 阅读'));
       nav.appendChild(el('span', 'spacer'));
+      // 顶部次级入口：目录仍在这里（章节名横条里放翻页）
       var catalogBtn = el('button', 'nav-tab', '目录');
       catalogBtn.id = 'catalogBtn';
       nav.appendChild(catalogBtn);
-      var bookCmtBtn = el('button', 'nav-tab', '书评');
-      bookCmtBtn.id = 'bookCommentsBtn';
-      nav.appendChild(bookCmtBtn);
-      var settingsBtn = el('button', 'nav-tab', '设置');
-      settingsBtn.id = 'settingsBtn';
-      nav.appendChild(settingsBtn);
       app.appendChild(nav);
     }
     var reader = el('div', 'reader');
     reader.id = 'reader';
     reader.classList.toggle('immersive', !showBars);
-    // 标题栏：沉浸式下也保留一条极简章节名横条（不占翻页区）
+
+    // ===== 标题栏：始终显示（沉浸 / 普通一致）=====
+    // 左侧：上一章 / 上一页
+    // 中间：章节名(居中)
+    // 右侧：下一页 / 下一章  ……  书评 / 加入书架 / 设置
     var bar = el('div', 'reader-bar' + (showBars ? '' : ' minimal'));
     bar.id = 'readerBar';
+    // 左侧翻页组
+    var leftGroup = el('div', 'reader-bar-group');
+    var prevC = el('button', 'reader-bar-icon');
+    prevC.id = 'prevChapter';
+    prevC.title = '上一章';
+    prevC.textContent = '‹';
+    var prevP = el('button', 'reader-bar-icon');
+    prevP.id = 'prevPage';
+    prevP.title = '上一页';
+    prevP.textContent = '‹';
+    leftGroup.appendChild(prevC);
+    leftGroup.appendChild(prevP);
+    bar.appendChild(leftGroup);
+    // 中间：章节名(居中)
     var titles = el('div', 'titles');
     var chapTitle = (state.chapter && state.chapter.title) || state.readerBookTitle || '加载中…';
     titles.appendChild(el('div', 'bt', chapTitle));
-    if (showBars) {
-      titles.appendChild(el('div', 'bs',
-        (state.readerBookTitle || '') +
-        (state.chapter && state.chapter.realChapterOrder ? ' · 第' + state.chapter.realChapterOrder + '章' : '') +
-        (state.chapter && state.chapter.chapterWordNumber ? ' · ' + fmtWord(state.chapter.chapterWordNumber) : '')));
-    } else {
-      // 沉浸式：极简副标题（书名 · 第X章），点击横条可呼出/隐藏完整工具栏
-      var sub = (state.readerBookTitle || '') +
-        (state.chapter && state.chapter.realChapterOrder ? ' · 第' + state.chapter.realChapterOrder + '章' : '');
-      if (sub) titles.appendChild(el('div', 'bs', sub));
-    }
+    var sub = (state.readerBookTitle || '') +
+      (state.chapter && state.chapter.realChapterOrder ? ' · 第' + state.chapter.realChapterOrder + '章' : '') +
+      (state.chapter && state.chapter.chapterWordNumber ? ' · ' + fmtWord(state.chapter.chapterWordNumber) : '');
+    if (sub) titles.appendChild(el('div', 'bs', sub));
     bar.appendChild(titles);
-    // 沉浸式：右侧加一个小 ⚙ 按钮，方便呼出设置
-    if (!showBars) {
-      var more = el('button', 'reader-bar-more');
-      more.id = 'settingsBtn';
-      more.title = '设置';
-      more.textContent = '⚙';
-      bar.appendChild(more);
-    }
+    // 右侧翻页组
+    var rightGroup = el('div', 'reader-bar-group');
+    var nextP = el('button', 'reader-bar-icon');
+    nextP.id = 'nextPage';
+    nextP.title = '下一页';
+    nextP.textContent = '›';
+    var nextC = el('button', 'reader-bar-icon');
+    nextC.id = 'nextChapter';
+    nextC.title = '下一章';
+    nextC.textContent = '›';
+    rightGroup.appendChild(nextP);
+    rightGroup.appendChild(nextC);
+    bar.appendChild(rightGroup);
+    // 工具组：书评 / 加入书架 / 设置
+    var toolGroup = el('div', 'reader-bar-group');
+    var cmtBtn = el('button', 'reader-bar-icon');
+    cmtBtn.id = 'bookCommentsBtn';
+    cmtBtn.title = '书评';
+    cmtBtn.textContent = '💬';
+    toolGroup.appendChild(cmtBtn);
+    var shelfBtn = el('button', 'reader-bar-icon');
+    shelfBtn.id = 'shelfAddInReaderBtn';
+    shelfBtn.title = '加入书架（云端）';
+    shelfBtn.textContent = '+';
+    toolGroup.appendChild(shelfBtn);
+    var setBtn = el('button', 'reader-bar-icon');
+    setBtn.id = 'settingsBtn';
+    setBtn.title = '设置';
+    setBtn.textContent = '⚙';
+    toolGroup.appendChild(setBtn);
+    bar.appendChild(toolGroup);
+
     reader.appendChild(bar);
     // 内容
     var content = el('div', 'reader-content');
     content.id = 'readerContent';
     reader.appendChild(content);
-    // 底部
-    if (showBars) {
-      var footer = el('div', 'reader-footer');
-      var prevC = el('button', 'btn ghost', '上一章');
-      prevC.id = 'prevChapter';
-      var prevP = el('button', 'btn', '‹ 上一页');
-      prevP.id = 'prevPage';
-      var info = el('div', 'page-info');
-      info.id = 'pageInfo';
-      var nextP = el('button', 'btn', '下一页 ›');
-      nextP.id = 'nextPage';
-      var nextC = el('button', 'btn ghost', '下一章');
-      nextC.id = 'nextChapter';
-      footer.appendChild(prevC);
-      footer.appendChild(prevP);
-      footer.appendChild(info);
-      footer.appendChild(nextP);
-      footer.appendChild(nextC);
-      reader.appendChild(footer);
-    }
+    // （底部翻页已合并到顶部"秃瓢"按钮；不再单独渲染 reader-footer）
     app.appendChild(reader);
     renderPage();
 
@@ -1382,6 +1393,25 @@
           removeReaderOverlays();
           renderSettingsPop($('#reader'));
         }
+        return;
+      }
+      if (t.id === 'shelfAddInReaderBtn') {
+        // 阅读器内：一键加入（云端）书架
+        var b = state.readerBookId;
+        if (!b) return;
+        var bk = t;
+        var oldTxt = bk.textContent;
+        bk.disabled = true;
+        bk.textContent = '…';
+        call('shelf-add', { bookId: b }).then(function (r) {
+          bk.textContent = r && r.remoteOk ? '✓' : '+';
+          bk.title = (r && r.remoteOk) ? '已加入云端书架' : '已加入本地（未登录或云端失败）';
+        }).catch(function (e) {
+          bk.textContent = oldTxt;
+          bk.title = '加入失败：' + e.message;
+        }).then(function () {
+          setTimeout(function () { try { bk.disabled = false; } catch (e) {} }, 1200);
+        });
         return;
       }
       if (t.id === 'closeDrawer') {
