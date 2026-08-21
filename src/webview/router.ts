@@ -156,7 +156,28 @@ async function handleMessage(webview: vscode.Webview, msg: any): Promise<void> {
 
     /* ------------------------------ 书架 ------------------------------ */
     case 'shelf-local-get': {
-      post(true, await getLocalShelf());
+      const items = await getLocalShelf();
+      // 补全缺失封面/书名（旧数据无封面，用 simple/info 稳定接口补齐并写回）
+      const missing = items.filter(i => !i.coverUrl || !i.title);
+      if (missing.length) {
+        try {
+          const info = await api.getBookSimpleInfo(missing.map(m => m.bookId));
+          const map = new Map(info.map(b => [b.book_id, b]));
+          let changed = false;
+          for (const it of items) {
+            const b = map.get(it.bookId);
+            if (b) {
+              if (!it.coverUrl && b.thumb_url) { it.coverUrl = b.thumb_url; changed = true; }
+              if (!it.title && b.book_name) { it.title = b.book_name; changed = true; }
+              if (!it.author && b.author_name) { it.author = b.author_name; changed = true; }
+            }
+          }
+          if (changed) await setLocalShelf(items);
+        } catch {
+          /* 网络失败不影响返回 */
+        }
+      }
+      post(true, items);
       break;
     }
     case 'shelf-local-set': {
@@ -254,7 +275,28 @@ async function handleMessage(webview: vscode.Webview, msg: any): Promise<void> {
 
     /* ------------------------------ 历史记录（本地） ------------------------------ */
     case 'history-get': {
-      post(true, await getReadHistory());
+      const items = await getReadHistory();
+      // 补全缺失封面/书名（历史条目可能来自无封面来源）
+      const missing = items.filter(i => !i.coverUrl || !i.title);
+      if (missing.length) {
+        try {
+          const info = await api.getBookSimpleInfo(missing.map(m => m.bookId));
+          const map = new Map(info.map(b => [b.book_id, b]));
+          let changed = false;
+          for (const it of items) {
+            const b = map.get(it.bookId);
+            if (b) {
+              if (!it.coverUrl && b.thumb_url) { it.coverUrl = b.thumb_url; changed = true; }
+              if (!it.title && b.book_name) { it.title = b.book_name; changed = true; }
+              if (!it.author && b.author_name) { it.author = b.author_name; changed = true; }
+            }
+          }
+          if (changed) await setReadHistory(items);
+        } catch {
+          /* 网络失败不影响返回 */
+        }
+      }
+      post(true, items);
       break;
     }
     case 'history-record': {

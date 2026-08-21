@@ -37,7 +37,7 @@
     view: 'bookstore',
     user: null,
     loggedIn: false,
-    settings: { fontSize: 19, lineHeight: 1.9, theme: 'night', showBars: true },
+    settings: { fontSize: 19, lineHeight: 1.9, theme: 'night', showBars: false, barsTouched: false },
     // 书城
     rankCats: [],
     rankCatsLoaded: false,
@@ -419,6 +419,8 @@
       if (state.shelfLocal.length) {
         state.shelfLocal.forEach(function (it) {
           var item = el('div', 'shelf-item');
+          item.dataset.bookId = it.bookId;
+          item.dataset.itemId = it.lastReadItemId || '';
           var img = el('img', 'cover');
           if (it.coverUrl) { img.src = it.coverUrl; img.onerror = coverFallback; }
           else img.style.background = 'linear-gradient(135deg,#ff6b3d,#ff3d2e)';
@@ -449,6 +451,8 @@
         if (state.shelfRemote.length) {
           state.shelfRemote.forEach(function (it) {
             var item = el('div', 'shelf-item');
+            item.dataset.bookId = it.book_id;
+            item.dataset.itemId = it.last_read_item_id || '';
             var img = el('img', 'cover');
             if (it.cover_url) { img.src = it.cover_url; img.onerror = coverFallback; }
             else img.style.background = 'linear-gradient(135deg,#888,#aaa)';
@@ -700,6 +704,11 @@
         (d.allItemIds || []).forEach(function (id, i) { chapters.push({ itemId: id, title: '第' + (i + 1) + '章' }); });
       }
       state.chapters = chapters;
+      // 刷新本地书架，保证续读数据最新
+      try {
+        var freshShelf = await call('shelf-local-get', {});
+        state.shelfLocal = freshShelf || [];
+      } catch (e) { /* 失败继续用旧数据 */ }
       // 恢复进度：历史续读优先，其次本地书架，再本地历史记录
       var resume = null;
       if (resumeItemId) {
@@ -1065,16 +1074,6 @@
   }
 
   /* ---------------- 书评 ---------------- */
-  function openBookComments() {
-    state.drawer = 'comments';
-    state.commentsKind = 'book';
-    state.comments = [];
-    state.commentsLoading = true;
-    state.commentsError = null;
-    renderReader();
-    loadBookComments();
-  }
-
   function loadBookComments() {
     var p = call('book-comments', { bookId: state.readerBookId, limit: 12 });
     p.then(function (r) {
@@ -1192,6 +1191,13 @@
   }
 
   /* ---------------- 事件委托 ---------------- */
+  function removeReaderOverlays() {
+    ['#catalogDrawer', '#commentsDrawer', '#settingsPop'].forEach(function (sel) {
+      var e = $(sel);
+      if (e) e.remove();
+    });
+  }
+
   document.addEventListener('click', function (ev) {
     var t = ev.target;
     var nav = t.closest ? t.closest('[data-nav]') : null;
@@ -1252,9 +1258,10 @@
     var shelfCover = t.closest ? t.closest('.shelf-item [data-bookId]') : null;
     if (shelfCover && state.view === 'shelf') {
       var bookId = shelfCover.dataset.bookId;
-      if (IS_SIDEBAR) { openBookInEditor(bookId); return; }
+      var resumeId = shelfCover.closest('.shelf-item').dataset.itemId || '';
+      if (IS_SIDEBAR) { openBookInEditor(bookId, resumeId); return; }
       var local = state.shelfLocal.find(function (i) { return i.bookId === bookId; });
-      enterReader(bookId, local ? local.title : bookId);
+      enterReader(bookId, local ? local.title : bookId, resumeId);
       return;
     }
     var rm = t.closest ? t.closest('[data-remove]') : null;
@@ -1312,27 +1319,46 @@
         return;
       }
       if (t.id === 'catalogBtn') {
-        state.drawer = state.drawer === 'catalog' ? null : 'catalog';
-        state.settingsOpen = false;
-        renderReader();
+        // 局部开合目录抽屉，不重建阅读器（避免闪烁）
+        if (state.drawer === 'catalog') { state.drawer = null; removeReaderOverlays(); }
+        else {
+          state.drawer = 'catalog';
+          state.settingsOpen = false;
+          removeReaderOverlays();
+          renderCatalogDrawer($('#reader'));
+        }
         return;
       }
       if (t.id === 'bookCommentsBtn') {
-        state.drawer = state.drawer === 'comments' ? null : 'comments';
-        state.settingsOpen = false;
-        if (state.drawer === 'comments') openBookComments();
-        else renderReader();
+        // 局部开合书评抽屉
+        if (state.drawer === 'comments') { state.drawer = null; removeReaderOverlays(); }
+        else {
+          state.drawer = 'comments';
+          state.settingsOpen = false;
+          removeReaderOverlays();
+          state.comments = [];
+          state.commentsLoading = true;
+          state.commentsError = null;
+          renderCommentsDrawer($('#reader'));
+          loadBookComments();
+        }
         return;
       }
       if (t.id === 'settingsBtn') {
-        state.settingsOpen = !state.settingsOpen;
-        state.drawer = null;
-        renderReader();
+        // 局部开合设置面板
+        if (state.settingsOpen) { state.settingsOpen = false; removeReaderOverlays(); }
+        else {
+          state.settingsOpen = true;
+          state.drawer = null;
+          removeReaderOverlays();
+          renderSettingsPop($('#reader'));
+        }
         return;
       }
       if (t.id === 'closeDrawer') {
         state.drawer = null;
-        renderReader();
+        state.settingsOpen = false;
+        removeReaderOverlays();
         return;
       }
       var chap = t.closest ? t.closest('.drawer .chap') : null;
@@ -1359,6 +1385,7 @@
       var showBarsChip = t.closest ? t.closest('[data-showBars]') : null;
       if (showBarsChip) {
         state.settings.showBars = showBarsChip.dataset.showBars === '1';
+        state.settings.barsTouched = true;
         saveSettings();
         renderReader();
         return;
@@ -1372,6 +1399,7 @@
         if (x < w * 0.3) { navPage(-1); return; }
         if (x > w * 0.7) { navPage(1); return; }
         state.settings.showBars = !state.settings.showBars;
+        state.settings.barsTouched = true;
         saveSettings();
         renderReader();
         return;
@@ -1399,18 +1427,21 @@
       state.settings.fontSize = Number(t.value);
       saveSettings();
       if (state.view === 'reader') {
+        // 只更新字体与分页，不重建阅读器（避免面板闪烁）
+        applySettings();
         state.pages = paginate(state.chapter ? state.chapter.paragraphs : []);
         state.pageIdx = Math.min(state.pageIdx, Math.max(0, state.pages.length - 1));
-        renderReader();
+        renderPage();
       }
     }
     if (t.id === 'lineHeightRange') {
       state.settings.lineHeight = Number(t.value);
       saveSettings();
       if (state.view === 'reader') {
+        applySettings();
         state.pages = paginate(state.chapter ? state.chapter.paragraphs : []);
         state.pageIdx = Math.min(state.pageIdx, Math.max(0, state.pages.length - 1));
-        renderReader();
+        renderPage();
       }
     }
   });
@@ -1431,8 +1462,11 @@
     else if (ctrl && ev.key === 'ArrowLeft') { ev.preventDefault(); prevChapter(); }
     else if (ctrl && ev.key === 'ArrowRight') { ev.preventDefault(); nextChapter(); }
     else if (ev.key === 'Escape') {
-      if (state.drawer) { state.drawer = null; renderReader(); }
-      else if (state.settingsOpen) { state.settingsOpen = false; renderReader(); }
+      if (state.drawer || state.settingsOpen) {
+        state.drawer = null;
+        state.settingsOpen = false;
+        removeReaderOverlays();
+      }
     }
   });
 
