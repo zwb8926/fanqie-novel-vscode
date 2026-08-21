@@ -855,7 +855,7 @@
     var prevC = el('button', 'reader-bar-icon');
     prevC.id = 'prevChapter';
     prevC.title = '上一章';
-    prevC.textContent = '‹';
+    prevC.textContent = '«';
     var prevP = el('button', 'reader-bar-icon');
     prevP.id = 'prevPage';
     prevP.title = '上一页';
@@ -881,7 +881,7 @@
     var nextC = el('button', 'reader-bar-icon');
     nextC.id = 'nextChapter';
     nextC.title = '下一章';
-    nextC.textContent = '›';
+    nextC.textContent = '»';
     rightGroup.appendChild(nextP);
     rightGroup.appendChild(nextC);
     bar.appendChild(rightGroup);
