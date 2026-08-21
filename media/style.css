@@ -244,9 +244,9 @@ body {
 .reader-footer .spacer { flex: 1; }
 .reader-loading { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; color: var(--fg2); background: var(--reader-bg); z-index: 25; }
 
-/* 目录抽屉 */
+/* 目录抽屉 —— fixed 定位挂在 document.body，覆盖整个 webview */
 .drawer {
-  position: absolute; top: 0; bottom: 0; right: 0; width: 320px; max-width: 90%;
+  position: fixed; top: 0; bottom: 0; right: 0; width: 320px; max-width: 90%;
   background: var(--bg2); box-shadow: -4px 0 20px var(--shadow); z-index: 60;
   display: flex; flex-direction: column;
   transform: translateX(105%); transition: transform 0.18s ease;
@@ -274,9 +274,9 @@ body {
 .comment-tabs .chip { font-size: 12px; }
 .comment-hint { padding: 12px; font-size: 12px; color: var(--fg2); line-height: 1.7; }
 
-/* 设置面板 */
+/* 设置面板 —— fixed 定位，挂在 body */
 .settings-pop {
-  position: absolute; top: 46px; right: 12px; background: var(--bg2); border: 1px solid var(--border);
+  position: fixed; top: 46px; right: 12px; background: var(--bg2); border: 1px solid var(--border);
   border-radius: 10px; padding: 12px; z-index: 65; box-shadow: 0 6px 24px var(--shadow); width: 230px;
 }
 .settings-pop .row { display: flex; align-items: center; justify-content: space-between; margin-bottom: 10px; font-size: 13px; }

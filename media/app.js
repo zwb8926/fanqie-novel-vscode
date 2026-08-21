@@ -403,6 +403,12 @@
   }
 
   /* ---------------- 书架 ---------------- */
+  // 工具：本地书架按 lastReadAt 倒序（最近阅读的排最前）
+  function sortShelfLocal() {
+    state.shelfLocal.sort(function (a, b) {
+      return (b.lastReadAt || b.addedAt || 0) - (a.lastReadAt || a.addedAt || 0);
+    });
+  }
   function renderShelf(view) {
     state.shelfLoading = true;
     Promise.all([
@@ -410,6 +416,8 @@
       call('shelf-remote-get', {}),
     ]).then(function (rs) {
       state.shelfLocal = rs[0] || [];
+      // 按最近阅读时间倒序（最近打开的排最前）
+      sortShelfLocal();
       state.shelfRemote = (rs[1] && rs[1].entries) || [];
       state.shelfLoading = false;
       view.innerHTML = '';
@@ -714,6 +722,7 @@
       try {
         var freshShelf = await call('shelf-local-get', {});
         state.shelfLocal = freshShelf || [];
+        sortShelfLocal();
       } catch (e) { /* 失败继续用旧数据 */ }
       // 恢复进度：历史续读优先，其次本地书架，再本地历史记录
       var resume = null;
@@ -776,10 +785,10 @@
       saveReadingProgress(c);
       // 数据就绪：重建 reader 重画顶栏章节名 + 进度条；如果抽屉开着就只更新 chrome
       if (state.drawer || state.settingsOpen) {
-        updateReaderChrome();
-        renderPage();
         // 取消挂载抽屉的 rAF（避免重复挂载）
         if (state._syncDrawersRaf) { cancelAnimationFrame(state._syncDrawersRaf); state._syncDrawersRaf = 0; }
+        updateReaderChrome();
+        renderPage();
       } else {
         renderReader();
       }
@@ -859,8 +868,10 @@
     }
     state.shelfLocal.unshift(item);
     // 兜底按 lastReadAt 倒序排（防止存储里的旧数据顺序错乱）
-    state.shelfLocal.sort(function (a, b) { return (b.lastReadAt || b.addedAt || 0) - (a.lastReadAt || a.addedAt || 0); });
-    call('shelf-local-set', { items: state.shelfLocal }).catch(function () { /* ignore */ });
+    sortShelfLocal();
+    // 同步把排好序的写回后端（保证 shelf-local-get 拿回来顺序一致）
+    var sorted = state.shelfLocal.slice();
+    call('shelf-local-set', { items: sorted }).catch(function () { /* ignore */ });
     // 记录历史（本地，无需登录）
     call('history-record', {
       bookId: state.readerBookId,
@@ -975,17 +986,14 @@
       eb.style.position = 'absolute';
       content.appendChild(eb);
     }
-    // 抽屉 / 设置面板 在 reader 重建范围内被清空——但 state.drawer 仍记录开启状态
-    // 此处不重画，由 syncDrawers() 重新挂载（避免 reader 重建瞬间产生"刷新"闪烁）
-    if (state._syncDrawersRaf) cancelAnimationFrame(state._syncDrawersRaf);
-    state._syncDrawersRaf = requestAnimationFrame(function () { state._syncDrawersRaf = 0; syncDrawers(); });
+    // 抽屉/设置面板独立挂在 document.body，reader 重建不影响
   }
 
-  /** 重新挂载所有开启的抽屉/设置面板到 app（在 reader 重建后调用） */
+  /** 重新挂载所有开启的抽屉/设置面板（如果被外部移除的话）—— 一般不需要调 */
   function syncDrawers() {
-    if (state.drawer === 'catalog' && !document.getElementById('catalogDrawer')) renderCatalogDrawer(app);
-    if (state.drawer === 'comments' && !document.getElementById('commentsDrawer')) renderCommentsDrawer(app);
-    if (state.settingsOpen && !document.getElementById('settingsPop')) renderSettingsPop(app);
+    if (state.drawer === 'catalog' && !document.getElementById('catalogDrawer')) renderCatalogDrawer();
+    if (state.drawer === 'comments' && !document.getElementById('commentsDrawer')) renderCommentsDrawer();
+    if (state.settingsOpen && !document.getElementById('settingsPop')) renderSettingsPop();
   }
 
   /** 分页：把段落列表切分为适合一屏的页 */
@@ -1129,9 +1137,8 @@
   }
 
   /* ---------------- 目录抽屉 ---------------- */
-  // 抽屉挂到 app 上（不挂到 reader）—— reader 重建不影响抽屉，目录不再"刷新"
-  function renderCatalogDrawer(root) {
-    if (!root) return;
+  // 抽屉挂到 document.body —— reader 重建不重画，render() 重建也不重画，绝对不"刷新"
+  function renderCatalogDrawer() {
     var drawer = el('div', 'drawer');
     drawer.id = 'catalogDrawer';
     var head = el('div', 'drawer-head');
@@ -1160,7 +1167,7 @@
       });
     }
     drawer.appendChild(body);
-    root.appendChild(drawer);
+    document.body.appendChild(drawer);
     requestAnimationFrame(function () { drawer.classList.add('open'); });
   }
 
@@ -1169,34 +1176,32 @@
   var _commentsCache = Object.create(null);
   function loadBookComments(force) {
     var bookId = state.readerBookId;
-    var target = app;
     if (!force && _commentsCache[bookId] && !_commentsCache[bookId].loading) {
       state.comments = _commentsCache[bookId].comments || [];
       state.commentsLoading = false;
       state.commentsError = _commentsCache[bookId].error || null;
-      renderCommentsDrawer(target);
+      renderCommentsDrawer();
       return;
     }
     _commentsCache[bookId] = { loading: true, comments: [], error: null };
     state.commentsLoading = true;
     state.commentsError = null;
-    renderCommentsDrawer(target);
+    renderCommentsDrawer();
     var p = call('book-comments', { bookId: bookId, limit: 12 });
     p.then(function (r) {
       state.comments = (r && r.comments) || [];
       state.commentsLoading = false;
       _commentsCache[bookId] = { loading: false, comments: state.comments, error: null };
-      renderCommentsDrawer(target);
+      renderCommentsDrawer();
     }).catch(function (e) {
       state.commentsLoading = false;
       state.commentsError = e.message;
       _commentsCache[bookId] = { loading: false, comments: state.comments, error: e.message };
-      renderCommentsDrawer(target);
+      renderCommentsDrawer();
     });
   }
 
-  function renderCommentsDrawer(root) {
-    if (!root) return;
+  function renderCommentsDrawer() {
     var old = $('#commentsDrawer');
     if (old) old.remove();
     var drawer = el('div', 'drawer comment-drawer');
@@ -1239,12 +1244,12 @@
       });
     }
     drawer.appendChild(body);
-    root.appendChild(drawer);
+    document.body.appendChild(drawer);
     requestAnimationFrame(function () { drawer.classList.add('open'); });
   }
 
   /* ---------------- 设置 ---------------- */
-  function renderSettingsPop(root) {
+  function renderSettingsPop() {
     var old = $('#settingsPop');
     if (old) old.remove();
     var pop = el('div', 'settings-pop');
@@ -1284,7 +1289,7 @@
     pop.appendChild(row3);
     var hint = el('div', 'key-hint', '键盘：←/→ 翻页 · Ctrl+←/→ 切换章节 · 点击正文：左 30% 上一页 / 右 30% 下一页');
     pop.appendChild(hint);
-    root.appendChild(pop);
+    document.body.appendChild(pop);
   }
 
   /* ---------------- 事件委托 ---------------- */
@@ -1448,13 +1453,13 @@
         return;
       }
       if (t.id === 'catalogBtn') {
-        // 局部开合目录抽屉（不重建阅读器，目录抽屉挂到 app 上避免 reader 重建时被清）
+        // 局部开合目录抽屉（抽屉挂在 document.body，reader 重建不影响）
         if (state.drawer === 'catalog') { state.drawer = null; removeReaderOverlays(); }
         else {
           state.drawer = 'catalog';
           state.settingsOpen = false;
           removeReaderOverlays();
-          renderCatalogDrawer(app);
+          renderCatalogDrawer();
         }
         return;
       }
@@ -1476,19 +1481,19 @@
             state.commentsLoading = true;
             state.commentsError = null;
           }
-          renderCommentsDrawer(app);
+          renderCommentsDrawer();
           loadBookComments(false);
         }
         return;
       }
       if (t.id === 'settingsBtn') {
-        // 局部开合设置面板（抽屉挂到 app 上，避免 reader 重建时被清）
+        // 局部开合设置面板（设置面板挂在 document.body）
         if (state.settingsOpen) { state.settingsOpen = false; removeReaderOverlays(); }
         else {
           state.settingsOpen = true;
           state.drawer = null;
           removeReaderOverlays();
-          renderSettingsPop(app);
+          renderSettingsPop();
         }
         return;
       }
@@ -1702,6 +1707,7 @@
   function refreshShelfCache() {
     call('shelf-local-get', {}).then(function (items) {
       state.shelfLocal = items || [];
+      sortShelfLocal();
     }).catch(function () { /* ignore */ });
   }
 
