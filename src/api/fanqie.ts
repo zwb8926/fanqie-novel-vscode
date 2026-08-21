@@ -624,18 +624,13 @@ export async function getRemoteBookshelf(): Promise<BookshelfEntry[]> {
 
   // 1) 简单信息：书名/作者/封面（官网同款接口）
   try {
-    const s = await requestJson<any>(`${C.HOST}/api/book/simple/info`, {
-      method: 'POST',
-      headers: webHeaders({ 'Content-Type': 'application/json' }),
-      body: JSON.stringify({ book_ids: entries.map(e => e.book_id) }),
-    });
-    const bookList: any[] = s.data?.bookList ?? [];
+    const bookList = await getBookSimpleInfo(entries.map(e => e.book_id));
     for (const e of entries) {
       const b = bookList.find((x: any) => String(x.book_id) === e.book_id);
       if (b) {
-        e.title = dec(b.book_name ?? '');
-        e.author = dec(b.author_name ?? '');
-        e.cover_url = b.thumb_url ?? '';
+        e.title = b.book_name;
+        e.author = b.author_name;
+        e.cover_url = b.thumb_url;
         e.serial_count = Number(b.serial_count ?? 0);
         e.creation_status = String(b.creation_status ?? '');
       }
@@ -673,7 +668,8 @@ export async function getRemoteBookshelf(): Promise<BookshelfEntry[]> {
 }
 
 export async function addToRemoteBookshelf(bookId: string): Promise<void> {
-  const j = await requestJson<any>(`${C.HOST}${C.BOOKSHELF_BASE}/add/v?aid=1967`, {
+  const q = new URLSearchParams(C.appQuery({ iid: '0' }));
+  const j = await requestJson<any>(`${C.HOST}${C.BOOKSHELF_BASE}/add/v?${q.toString()}`, {
     method: 'POST',
     headers: webHeaders({ 'Content-Type': 'application/json' }),
     body: JSON.stringify({
@@ -685,7 +681,8 @@ export async function addToRemoteBookshelf(bookId: string): Promise<void> {
 }
 
 export async function removeFromRemoteBookshelf(bookId: string): Promise<void> {
-  const j = await requestJson<any>(`${C.HOST}${C.BOOKSHELF_BASE}/delete/v?aid=1967`, {
+  const q = new URLSearchParams(C.appQuery({ iid: '0' }));
+  const j = await requestJson<any>(`${C.HOST}${C.BOOKSHELF_BASE}/delete/v?${q.toString()}`, {
     method: 'POST',
     headers: webHeaders({ 'Content-Type': 'application/json' }),
     body: JSON.stringify({
@@ -693,6 +690,33 @@ export async function removeFromRemoteBookshelf(bookId: string): Promise<void> {
     }),
   });
   if (j.code !== 0 && j.code !== undefined) throw new ApiError(j.message ?? '移出书架失败', j.code);
+}
+
+/**
+ * 批量书籍简单信息（官网同款：书名/作者/封面），比详情接口更稳定，
+ * 封面是常规 CDN 图（非签名 URL），书架/封面展示用。
+ */
+export async function getBookSimpleInfo(
+  bookIds: string[]
+): Promise<Array<{ book_id: string; book_name: string; author_name: string; thumb_url: string; serial_count: number; creation_status: string }>> {
+  try {
+    const s = await requestJson<any>(`${C.HOST}/api/book/simple/info`, {
+      method: 'POST',
+      headers: webHeaders({ 'Content-Type': 'application/json' }),
+      body: JSON.stringify({ book_ids: bookIds }),
+    });
+    const list: any[] = s.data?.bookList ?? [];
+    return list.map((b: any) => ({
+      book_id: String(b.book_id ?? ''),
+      book_name: dec(b.book_name ?? ''),
+      author_name: dec(b.author_name ?? ''),
+      thumb_url: b.thumb_url ?? '',
+      serial_count: Number(b.serial_count ?? 0),
+      creation_status: String(b.creation_status ?? ''),
+    }));
+  } catch {
+    return [];
+  }
 }
 
 export async function getReadProgress(): Promise<Array<{ book_id: string; item_id: string; read_timestamp: number }>> {
@@ -758,127 +782,6 @@ export async function getBookComment(bookId: string, commentId: string): Promise
     score: Number(c.info?.score ?? 0),
     book_title: dec(data.novel?.title ?? ''),
   };
-}
-
-/* ------------------------------ 章评/段评（APP 接口，尽力而为） ------------------------------ */
-
-/**
- * 章评：番茄 APP 的章节评论接口（web 端未暴露章评列表）。
- * 走红烛/APP 同源接口族，需携带设备参数；不同网络环境可达性不同。
- */
-export async function getChapterComments(
-  bookId: string,
-  itemId: string,
-  page = 0,
-  pageSize = 20
-): Promise<{ comments: BookComment[]; total: number }> {
-  const dev = await import('../net/store').then(m => m.getDevice());
-  const q = new URLSearchParams({
-    book_id: bookId,
-    item_id: itemId,
-    page_index: String(page),
-    page_size: String(pageSize),
-    sort_type: '1',
-    aid: '1967',
-    app_name: 'novelapp',
-    device_platform: 'android',
-    device_id: dev.deviceId,
-    iid: dev.installId,
-  });
-  const candidates = [
-    `https://reading.snssdk.com/reading/comment/list/v?${q.toString()}`,
-    `https://reading.snssdk.com/reading/comment/list_comment/v?${q.toString()}`,
-    `https://api5-normal-sinfonlineb.fqnovel.com/reading/comment/list/v?${q.toString()}`,
-    `https://api5-sinfonlinec.jxbhmy.com/reading/comment/list/v?${q.toString()}`,
-  ];
-  let lastErr: Error | null = null;
-  for (const url of candidates) {
-    try {
-      const j = await requestJson<any>(url, {
-        headers: { 'User-Agent': 'com.dragon.read', Referer: C.HOST + '/', Accept: 'application/json' },
-        timeoutMs: 12000,
-      });
-      const list = extractComments(j);
-      if (list.length || j.code === 0) {
-        return { comments: list, total: Number(j.data?.total ?? list.length) };
-      }
-      lastErr = new ApiError(j.message ?? '空评论', j.code);
-    } catch (e) {
-      lastErr = e as Error;
-    }
-  }
-  throw new ApiError(
-    `章评接口暂不可用（${lastErr?.message ?? '未知错误'}）。网页端未开放章评，可在番茄小说 App 内查看本章评论。`
-  );
-}
-
-/**
- * 段评：按段落索引获取该段落的评论（App 专属功能）。
- */
-export async function getParagraphComments(
-  bookId: string,
-  itemId: string,
-  paragraphIndex: number
-): Promise<BookComment[]> {
-  const dev = await import('../net/store').then(m => m.getDevice());
-  const q = new URLSearchParams({
-    book_id: bookId,
-    item_id: itemId,
-    paragraph_index: String(paragraphIndex),
-    aid: '1967',
-    app_name: 'novelapp',
-    device_platform: 'android',
-    device_id: dev.deviceId,
-    iid: dev.installId,
-  });
-  const candidates = [
-    `https://reading.snssdk.com/reading/comment/paragraph/list/v?${q.toString()}`,
-    `https://reading.snssdk.com/reading/comment/paragraph_comment/v?${q.toString()}`,
-    `https://api5-normal-sinfonlineb.fqnovel.com/reading/comment/paragraph/list/v?${q.toString()}`,
-  ];
-  let lastErr: Error | null = null;
-  for (const url of candidates) {
-    try {
-      const j = await requestJson<any>(url, {
-        headers: { 'User-Agent': 'com.dragon.read', Referer: C.HOST + '/', Accept: 'application/json' },
-        timeoutMs: 12000,
-      });
-      const list = extractComments(j);
-      if (list.length || j.code === 0) return list;
-      lastErr = new ApiError(j.message ?? '空评论', j.code);
-    } catch (e) {
-      lastErr = e as Error;
-    }
-  }
-  throw new ApiError(
-    `段评接口暂不可用（${lastErr?.message ?? '未知错误'}）。段评为番茄小说 App 专属功能，网页端未开放。`
-  );
-}
-
-function extractComments(j: any): BookComment[] {
-  try {
-    const data = j?.data;
-    const list = Array.isArray(data) ? data : data?.comment_list ?? data?.comments ?? [];
-    return list
-      .map((c: any) => {
-        const info = c?.info ?? c;
-        const user = c?.user ?? {};
-        return {
-          comment_id: String(info?.comment_id ?? c?.comment_id ?? ''),
-          user_id: String(user?.user_id ?? info?.user_id ?? ''),
-          nick_name: dec(user?.nick_name ?? user?.user_name ?? '匿名'),
-          avatar: user?.avatar ?? '',
-          text: dec(info?.text ?? c?.text ?? ''),
-          create_time: Number(info?.create_time ?? 0) * 1000,
-          digg_count: Number(info?.digg_count ?? 0),
-          reply_count: Number(info?.reply_count ?? 0),
-          score: Number(info?.score ?? 0),
-        };
-      })
-      .filter((c: BookComment) => c.comment_id);
-  } catch {
-    return [];
-  }
 }
 
 /* ---------------------------------- 杂项 ---------------------------------- */

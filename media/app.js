@@ -37,7 +37,7 @@
     view: 'bookstore',
     user: null,
     loggedIn: false,
-    settings: { fontSize: 19, lineHeight: 1.9, theme: 'night', showBars: true },
+    settings: { fontSize: 19, lineHeight: 1.9, theme: 'night' },
     // 书城
     rankCats: [],
     rankCatsLoaded: false,
@@ -70,11 +70,10 @@
     readerError: null,
     // 抽屉
     drawer: null, // 'catalog' | 'comments' | null
-    commentsKind: 'chapter',
+    commentsKind: 'book',
     comments: [],
     commentsLoading: false,
     commentsError: null,
-    activeParagraphIdx: -1,
     settingsOpen: false,
     // 书架
     shelfLocal: [],
@@ -404,6 +403,12 @@
   }
 
   /* ---------------- 书架 ---------------- */
+  // 工具：本地书架按 lastReadAt 倒序（最近阅读的排最前）
+  function sortShelfLocal() {
+    state.shelfLocal.sort(function (a, b) {
+      return (b.lastReadAt || b.addedAt || 0) - (a.lastReadAt || a.addedAt || 0);
+    });
+  }
   function renderShelf(view) {
     state.shelfLoading = true;
     Promise.all([
@@ -411,6 +416,8 @@
       call('shelf-remote-get', {}),
     ]).then(function (rs) {
       state.shelfLocal = rs[0] || [];
+      // 按最近阅读时间倒序（最近打开的排最前）
+      sortShelfLocal();
       state.shelfRemote = (rs[1] && rs[1].entries) || [];
       state.shelfLoading = false;
       view.innerHTML = '';
@@ -420,23 +427,29 @@
       if (state.shelfLocal.length) {
         state.shelfLocal.forEach(function (it) {
           var item = el('div', 'shelf-item');
+          // 整个 .shelf-item 自己就是点击目标（不再依赖子元素选择器）
+          item.dataset.bookId = it.bookId;
+          item.dataset.itemId = it.lastReadItemId || '';
+          item.dataset.action = 'open';
+          item.title = '点击继续阅读';
           var img = el('img', 'cover');
           if (it.coverUrl) { img.src = it.coverUrl; img.onerror = coverFallback; }
           else img.style.background = 'linear-gradient(135deg,#ff6b3d,#ff3d2e)';
-          img.dataset.bookId = it.bookId;
           var rm = el('button', 'remove', '✕');
           rm.dataset.remove = it.bookId;
           var title = el('div', 'title', it.title || it.bookId);
-          title.dataset.bookId = it.bookId;
-          item.appendChild(rm);
-          item.appendChild(img);
-          item.appendChild(title);
           if (it.lastReadChapterTitle) {
             var rd = el('div', 'reading', '读到：' + it.lastReadChapterTitle);
-            rd.dataset.bookId = it.bookId;
+            item.appendChild(rm);
+            item.appendChild(img);
+            item.appendChild(title);
             item.appendChild(rd);
           } else {
-            item.appendChild(el('div', 'meta', it.author || ''));
+            var meta = el('div', 'meta', it.author || '');
+            item.appendChild(rm);
+            item.appendChild(img);
+            item.appendChild(title);
+            item.appendChild(meta);
           }
           grid.appendChild(item);
         });
@@ -450,17 +463,19 @@
         if (state.shelfRemote.length) {
           state.shelfRemote.forEach(function (it) {
             var item = el('div', 'shelf-item');
+            // 整块可点
+            item.dataset.bookId = it.book_id;
+            item.dataset.itemId = it.last_read_item_id || '';
+            item.dataset.action = 'open';
+            item.title = '点击继续阅读';
             var img = el('img', 'cover');
             if (it.cover_url) { img.src = it.cover_url; img.onerror = coverFallback; }
             else img.style.background = 'linear-gradient(135deg,#888,#aaa)';
-            img.dataset.bookId = it.book_id;
             var t = el('div', 'title', it.title || it.book_id);
-            t.dataset.bookId = it.book_id;
             item.appendChild(img);
             item.appendChild(t);
             if (it.current_chapter_title) {
               var rd = el('div', 'reading', '读到：' + it.current_chapter_title);
-              rd.dataset.bookId = it.book_id;
               item.appendChild(rd);
             } else if (it.author) {
               item.appendChild(el('div', 'meta', it.author));
@@ -523,6 +538,8 @@
         box.appendChild(el('div', 'empty', '暂无历史记录，打开一本书开始记录'));
         return;
       }
+      // 兜底按 readAt 倒序（防止旧持久化数据顺序错乱）
+      items.sort(function (a, b) { return (b.readAt || 0) - (a.readAt || 0); });
       items.forEach(function (h) {
         var row = el('div', 'history-item');
         var img = el('img', 'cover');
@@ -688,7 +705,7 @@
     state.settingsOpen = false;
     render();
     // 加载目录
-    call('directory', { bookId: bookId }).then(function (d) {
+    call('directory', { bookId: bookId }).then(async function (d) {
       state.directory = d;
       var chapters = [];
       (d.volumes || []).forEach(function (v) {
@@ -701,7 +718,13 @@
         (d.allItemIds || []).forEach(function (id, i) { chapters.push({ itemId: id, title: '第' + (i + 1) + '章' }); });
       }
       state.chapters = chapters;
-      // 恢复进度：历史续读优先，其次本地书架
+      // 刷新本地书架，保证续读数据最新
+      try {
+        var freshShelf = await call('shelf-local-get', {});
+        state.shelfLocal = freshShelf || [];
+        sortShelfLocal();
+      } catch (e) { /* 失败继续用旧数据 */ }
+      // 恢复进度：历史续读优先，其次本地书架，再本地历史记录
       var resume = null;
       if (resumeItemId) {
         var hidx = chapters.findIndex(function (c) { return c.itemId === resumeItemId; });
@@ -713,6 +736,16 @@
           var idx = chapters.findIndex(function (c) { return c.itemId === shelfItem.lastReadItemId; });
           if (idx >= 0) resume = { idx: idx, itemId: shelfItem.lastReadItemId };
         }
+      }
+      if (!resume) {
+        try {
+          var hist = await call('history-get', {});
+          var h = (hist || []).find(function (x) { return x.bookId === bookId; });
+          if (h && h.itemId) {
+            var hidx2 = chapters.findIndex(function (c) { return c.itemId === h.itemId; });
+            if (hidx2 >= 0) resume = { idx: hidx2, itemId: h.itemId };
+          }
+        } catch (e) { /* 可选兜底 */ }
       }
       if (resume) {
         state.chapterIdx = resume.idx;
@@ -735,7 +768,9 @@
   function openChapter(itemId, idx, needRender) {
     state.readerLoading = true;
     state.readerError = null;
-    if (needRender !== false) renderReader();
+    // 抽屉打开时不要 renderReader（避免抽屉闪烁/重画）
+    if (needRender !== false && !state.drawer && !state.settingsOpen) renderReader();
+    else renderPage();
     var cached = chapterCache.get(itemId);
     var p = cached ? Promise.resolve(cached) : call('chapter', { itemId: itemId }).then(function (c) {
       chapterCache.set(itemId, c);
@@ -746,16 +781,62 @@
       if (idx >= 0) state.chapterIdx = idx;
       state.pages = paginate(c.paragraphs || []);
       state.pageIdx = 0;
-      state.activeParagraphIdx = -1;
       state.readerLoading = false;
       saveReadingProgress(c);
-      renderReader();
+      // 数据就绪：重建 reader 重画顶栏章节名 + 进度条；如果抽屉开着就只更新 chrome
+      if (state.drawer || state.settingsOpen) {
+        // 取消挂载抽屉的 rAF（避免重复挂载）
+        if (state._syncDrawersRaf) { cancelAnimationFrame(state._syncDrawersRaf); state._syncDrawersRaf = 0; }
+        updateReaderChrome();
+        renderPage();
+      } else {
+        renderReader();
+      }
       prefetchNext(c);
     }).catch(function (e) {
       state.readerLoading = false;
       state.readerError = e.message;
-      renderReader();
+      if (state.drawer || state.settingsOpen) {
+        // 错误也只更新 chrome（不重画整页避免抽屉闪烁）
+        var errEl = document.getElementById('readerLoading');
+        if (errEl) errEl.remove();
+        var content = document.getElementById('readerContent');
+        if (content) {
+          var oldErr = content.querySelector('.reader-loading');
+          if (oldErr) oldErr.remove();
+          var eb = errBox(e.message);
+          eb.className = 'err-box reader-loading';
+          eb.style.position = 'absolute';
+          content.appendChild(eb);
+        }
+      } else {
+        renderReader();
+      }
     });
+  }
+
+  // 翻章/翻页后更新顶栏章节名 + 目录高亮（不重建 reader，不重画抽屉）
+  function updateReaderChrome() {
+    var bar = document.getElementById('readerBar');
+    if (bar) {
+      var bt = bar.querySelector('.bt');
+      var bs = bar.querySelector('.bs');
+      var chapTitle = (state.chapter && state.chapter.title) || state.readerBookTitle || '加载中…';
+      if (bt) bt.textContent = chapTitle;
+      if (bs) {
+        var sub = (state.readerBookTitle || '') +
+          (state.chapter && state.chapter.realChapterOrder ? ' · 第' + state.chapter.realChapterOrder + '章' : '') +
+          (state.chapter && state.chapter.chapterWordNumber ? ' · ' + fmtWord(state.chapter.chapterWordNumber) : '');
+        bs.textContent = sub;
+      }
+    }
+    // 目录抽屉当前章节高亮
+    var drawer = document.getElementById('catalogDrawer');
+    if (drawer && state.chapter) {
+      var cur = state.chapter.itemId;
+      var chaps = drawer.querySelectorAll('.chap');
+      chaps.forEach(function (n) { n.classList.toggle('active', n.dataset.itemId === cur); });
+    }
   }
 
   function prefetchNext(c) {
@@ -770,19 +851,27 @@
     if (!state.readerBookId) return;
     var idx = state.shelfLocal.findIndex(function (i) { return i.bookId === state.readerBookId; });
     var cover = state.bookCoverUrl || (idx >= 0 ? state.shelfLocal[idx].coverUrl : '') || '';
+    var now = Date.now();
     var item = {
       bookId: state.readerBookId,
       title: state.readerBookTitle || c.bookName || state.readerBookId,
       author: c.author || '',
       coverUrl: cover,
-      addedAt: idx >= 0 ? state.shelfLocal[idx].addedAt : Date.now(),
+      addedAt: idx >= 0 ? state.shelfLocal[idx].addedAt : now,
       lastReadItemId: c.itemId,
       lastReadChapterTitle: c.title,
-      lastReadAt: Date.now(),
+      lastReadAt: now,
     };
-    if (idx >= 0) state.shelfLocal[idx] = item;
-    else state.shelfLocal.unshift(item);
-    call('shelf-local-set', { items: state.shelfLocal }).catch(function () { /* ignore */ });
+    if (idx >= 0) {
+      // 已存在：更新字段并移到最前
+      state.shelfLocal.splice(idx, 1);
+    }
+    state.shelfLocal.unshift(item);
+    // 兜底按 lastReadAt 倒序排（防止存储里的旧数据顺序错乱）
+    sortShelfLocal();
+    // 同步把排好序的写回后端（保证 shelf-local-get 拿回来顺序一致）
+    var sorted = state.shelfLocal.slice();
+    call('shelf-local-set', { items: sorted }).catch(function () { /* ignore */ });
     // 记录历史（本地，无需登录）
     call('history-record', {
       bookId: state.readerBookId,
@@ -804,61 +893,86 @@
 
   function renderReader() {
     applySettings();
-    var nav = el('div', 'navbar');
-    var back = el('button', 'btn ghost', '‹ 返回');
-    back.id = 'readerBack';
-    nav.appendChild(back);
-    nav.appendChild(el('span', 'brand', '🍅 阅读'));
-    nav.appendChild(el('span', 'spacer'));
-    var catalogBtn = el('button', 'nav-tab', '目录');
-    catalogBtn.id = 'catalogBtn';
-    nav.appendChild(catalogBtn);
-    var chapCmtBtn = el('button', 'nav-tab', '章评');
-    chapCmtBtn.id = 'chapterCommentsBtn';
-    nav.appendChild(chapCmtBtn);
-    var bookCmtBtn = el('button', 'nav-tab', '书评');
-    bookCmtBtn.id = 'bookCommentsBtn';
-    nav.appendChild(bookCmtBtn);
-    var settingsBtn = el('button', 'nav-tab', '设置');
-    settingsBtn.id = 'settingsBtn';
-    nav.appendChild(settingsBtn);
-
+    // 1.2.2+ 阅读器只保留沉浸式（章节名横条作为最顶栏 + 全屏正文），不再有"完整工具栏"模式
     app.innerHTML = '';
-    app.appendChild(nav);
+
     var reader = el('div', 'reader');
     reader.id = 'reader';
-    // 标题栏
-    var bar = el('div', 'reader-bar');
+    reader.classList.add('immersive'); // 永远沉浸
+
+    // 最顶栏：返回 + 章节名(居中) + 目录 + 书评 + 加入书架 + 设置
+    // 翻页秃瓢放在章节名左右
+    var bar = el('div', 'reader-bar minimal');
+    bar.id = 'readerBar';
+    // 左侧：返回 + 翻页（上章/上页）
+    var leftGroup = el('div', 'reader-bar-group');
+    var back = el('button', 'reader-bar-icon');
+    back.id = 'readerBack';
+    back.title = '返回';
+    back.textContent = '‹';
+    leftGroup.appendChild(back);
+    var prevC = el('button', 'reader-bar-icon');
+    prevC.id = 'prevChapter';
+    prevC.title = '上一章';
+    prevC.textContent = '«';
+    var prevP = el('button', 'reader-bar-icon');
+    prevP.id = 'prevPage';
+    prevP.title = '上一页';
+    prevP.textContent = '‹';
+    leftGroup.appendChild(prevC);
+    leftGroup.appendChild(prevP);
+    bar.appendChild(leftGroup);
+    // 中间：章节名(居中)
     var titles = el('div', 'titles');
-    titles.appendChild(el('div', 'bt', (state.chapter && state.chapter.title) || state.readerBookTitle || '加载中…'));
-    titles.appendChild(el('div', 'bs',
-      (state.readerBookTitle || '') +
+    var chapTitle = (state.chapter && state.chapter.title) || state.readerBookTitle || '加载中…';
+    titles.appendChild(el('div', 'bt', chapTitle));
+    var sub = (state.readerBookTitle || '') +
       (state.chapter && state.chapter.realChapterOrder ? ' · 第' + state.chapter.realChapterOrder + '章' : '') +
-      (state.chapter && state.chapter.chapterWordNumber ? ' · ' + fmtWord(state.chapter.chapterWordNumber) : '')));
+      (state.chapter && state.chapter.chapterWordNumber ? ' · ' + fmtWord(state.chapter.chapterWordNumber) : '');
+    if (sub) titles.appendChild(el('div', 'bs', sub));
     bar.appendChild(titles);
+    // 右侧：翻页（下页/下章）+ 目录 + 书评 + 加入书架 + 设置
+    var rightGroup = el('div', 'reader-bar-group');
+    var nextP = el('button', 'reader-bar-icon');
+    nextP.id = 'nextPage';
+    nextP.title = '下一页';
+    nextP.textContent = '›';
+    var nextC = el('button', 'reader-bar-icon');
+    nextC.id = 'nextChapter';
+    nextC.title = '下一章';
+    nextC.textContent = '»';
+    rightGroup.appendChild(nextP);
+    rightGroup.appendChild(nextC);
+    bar.appendChild(rightGroup);
+    var toolGroup = el('div', 'reader-bar-group');
+    var catalogBtn = el('button', 'reader-bar-icon');
+    catalogBtn.id = 'catalogBtn';
+    catalogBtn.title = '目录';
+    catalogBtn.textContent = '☰';
+    toolGroup.appendChild(catalogBtn);
+    var cmtBtn = el('button', 'reader-bar-icon');
+    cmtBtn.id = 'bookCommentsBtn';
+    cmtBtn.title = '书评';
+    cmtBtn.textContent = '💬';
+    toolGroup.appendChild(cmtBtn);
+    var shelfBtn = el('button', 'reader-bar-icon');
+    shelfBtn.id = 'shelfAddInReaderBtn';
+    shelfBtn.title = '加入书架（云端）';
+    shelfBtn.textContent = '+';
+    toolGroup.appendChild(shelfBtn);
+    var setBtn = el('button', 'reader-bar-icon');
+    setBtn.id = 'settingsBtn';
+    setBtn.title = '设置';
+    setBtn.textContent = '⚙';
+    toolGroup.appendChild(setBtn);
+    bar.appendChild(toolGroup);
+
     reader.appendChild(bar);
-    // 内容
     var content = el('div', 'reader-content');
     content.id = 'readerContent';
     reader.appendChild(content);
-    // 底部
-    var footer = el('div', 'reader-footer');
-    var prevC = el('button', 'btn ghost', '上一章');
-    prevC.id = 'prevChapter';
-    var prevP = el('button', 'btn', '‹ 上一页');
-    prevP.id = 'prevPage';
-    var info = el('div', 'page-info');
-    info.id = 'pageInfo';
-    var nextP = el('button', 'btn', '下一页 ›');
-    nextP.id = 'nextPage';
-    var nextC = el('button', 'btn ghost', '下一章');
-    nextC.id = 'nextChapter';
-    footer.appendChild(prevC);
-    footer.appendChild(prevP);
-    footer.appendChild(info);
-    footer.appendChild(nextP);
-    footer.appendChild(nextC);
-    reader.appendChild(footer);
+    app.appendChild(reader);
+    // （底部翻页已合并到顶部"秃瓢"按钮；不再单独渲染 reader-footer）
     app.appendChild(reader);
     renderPage();
 
@@ -872,10 +986,14 @@
       eb.style.position = 'absolute';
       content.appendChild(eb);
     }
-    // 目录抽屉
-    if (state.drawer === 'catalog') renderCatalogDrawer(reader);
-    if (state.drawer === 'comments') renderCommentsDrawer(reader);
-    if (state.settingsOpen) renderSettingsPop(reader);
+    // 抽屉/设置面板独立挂在 document.body，reader 重建不影响
+  }
+
+  /** 重新挂载所有开启的抽屉/设置面板（如果被外部移除的话）—— 一般不需要调 */
+  function syncDrawers() {
+    if (state.drawer === 'catalog' && !document.getElementById('catalogDrawer')) renderCatalogDrawer();
+    if (state.drawer === 'comments' && !document.getElementById('commentsDrawer')) renderCommentsDrawer();
+    if (state.settingsOpen && !document.getElementById('settingsPop')) renderSettingsPop();
   }
 
   /** 分页：把段落列表切分为适合一屏的页 */
@@ -1019,7 +1137,8 @@
   }
 
   /* ---------------- 目录抽屉 ---------------- */
-  function renderCatalogDrawer(root) {
+  // 抽屉挂到 document.body —— reader 重建不重画，render() 重建也不重画，绝对不"刷新"
+  function renderCatalogDrawer() {
     var drawer = el('div', 'drawer');
     drawer.id = 'catalogDrawer';
     var head = el('div', 'drawer-head');
@@ -1048,81 +1167,51 @@
       });
     }
     drawer.appendChild(body);
-    root.appendChild(drawer);
+    document.body.appendChild(drawer);
     requestAnimationFrame(function () { drawer.classList.add('open'); });
   }
 
-  /* ---------------- 评论 ---------------- */
-  function openComments(kind, paraIdx) {
-    state.drawer = 'comments';
-    state.commentsKind = kind || 'chapter';
-    state.comments = [];
-    state.commentsLoading = true;
-    state.commentsError = null;
-    if (paraIdx !== undefined) state.activeParagraphIdx = paraIdx;
-    renderReader();
-    loadComments();
-  }
-
-  function loadComments() {
-    if (state.commentsKind !== 'book' && !(state.chapter && state.chapter.itemId)) {
+  /* ---------------- 书评 ---------------- */
+  // 缓存已加载过的评论（按 bookId 索引），避免重复打开时重新拉取
+  var _commentsCache = Object.create(null);
+  function loadBookComments(force) {
+    var bookId = state.readerBookId;
+    if (!force && _commentsCache[bookId] && !_commentsCache[bookId].loading) {
+      state.comments = _commentsCache[bookId].comments || [];
       state.commentsLoading = false;
-      state.commentsError = '请先打开章节';
-      renderCommentsDrawer($('#reader'));
+      state.commentsError = _commentsCache[bookId].error || null;
+      renderCommentsDrawer();
       return;
     }
-    var p = null;
-    if (state.commentsKind === 'book') {
-      p = call('book-comments', { bookId: state.readerBookId, limit: 12 });
-    } else if (state.commentsKind === 'paragraph') {
-      p = call('paragraph-comments', {
-        bookId: state.readerBookId,
-        itemId: state.chapter && state.chapter.itemId,
-        paragraphIndex: state.activeParagraphIdx,
-      }).then(function (r) { return { comments: r.comments, total: r.comments.length }; });
-    } else {
-      p = call('chapter-comments', {
-        bookId: state.readerBookId,
-        itemId: state.chapter && state.chapter.itemId,
-        page: 0,
-      });
-    }
+    _commentsCache[bookId] = { loading: true, comments: [], error: null };
+    state.commentsLoading = true;
+    state.commentsError = null;
+    renderCommentsDrawer();
+    var p = call('book-comments', { bookId: bookId, limit: 12 });
     p.then(function (r) {
       state.comments = (r && r.comments) || [];
       state.commentsLoading = false;
-      renderCommentsDrawer($('#reader'));
+      _commentsCache[bookId] = { loading: false, comments: state.comments, error: null };
+      renderCommentsDrawer();
     }).catch(function (e) {
       state.commentsLoading = false;
       state.commentsError = e.message;
-      renderCommentsDrawer($('#reader'));
+      _commentsCache[bookId] = { loading: false, comments: state.comments, error: e.message };
+      renderCommentsDrawer();
     });
   }
 
-  function renderCommentsDrawer(root) {
-    if (!root) return;
+  function renderCommentsDrawer() {
     var old = $('#commentsDrawer');
     if (old) old.remove();
     var drawer = el('div', 'drawer comment-drawer');
     drawer.id = 'commentsDrawer';
     var head = el('div', 'drawer-head');
-    var kindLabel = { chapter: '章评', paragraph: '段评', book: '书评' }[state.commentsKind] || '评论';
-    var title = el('span', null, kindLabel + (state.commentsKind === 'paragraph' && state.activeParagraphIdx >= 0 ? ' · 第' + (state.activeParagraphIdx + 1) + '段' : ''));
-    head.appendChild(title);
+    head.appendChild(el('span', null, '书评'));
     var close = el('button', null, '✕');
     close.id = 'closeDrawer';
     head.appendChild(close);
     drawer.appendChild(head);
-    // tabs
-    var tabs = el('div', 'comment-tabs');
-    var mkTab = function (kind, label) {
-      var c = el('button', 'chip' + (state.commentsKind === kind ? ' active' : ''), label);
-      c.dataset.cmtKind = kind;
-      return c;
-    };
-    tabs.appendChild(mkTab('chapter', '章评'));
-    if (state.activeParagraphIdx >= 0) tabs.appendChild(mkTab('paragraph', '段评'));
-    tabs.appendChild(mkTab('book', '书评'));
-    drawer.appendChild(tabs);
     var body = el('div', 'drawer-body');
     if (state.commentsLoading) {
       body.appendChild(el('div', 'loading', '加载评论中…'));
@@ -1155,12 +1244,12 @@
       });
     }
     drawer.appendChild(body);
-    root.appendChild(drawer);
+    document.body.appendChild(drawer);
     requestAnimationFrame(function () { drawer.classList.add('open'); });
   }
 
   /* ---------------- 设置 ---------------- */
-  function renderSettingsPop(root) {
+  function renderSettingsPop() {
     var old = $('#settingsPop');
     if (old) old.remove();
     var pop = el('div', 'settings-pop');
@@ -1198,14 +1287,29 @@
     });
     row3.appendChild(sw);
     pop.appendChild(row3);
-    var hint = el('div', 'key-hint', '键盘：←/→ 翻页 · Ctrl+←/→ 切换章节 · 点击段落实行可查看段评');
+    var hint = el('div', 'key-hint', '键盘：←/→ 翻页 · Ctrl+←/→ 切换章节 · 点击正文：左 30% 上一页 / 右 30% 下一页');
     pop.appendChild(hint);
-    root.appendChild(pop);
+    document.body.appendChild(pop);
   }
 
   /* ---------------- 事件委托 ---------------- */
+  function removeReaderOverlays() {
+    ['#catalogDrawer', '#commentsDrawer', '#settingsPop'].forEach(function (sel) {
+      var e = $(sel);
+      if (e) e.remove();
+    });
+  }
+
   document.addEventListener('click', function (ev) {
     var t = ev.target;
+    // 调试日志：点中 .shelf-item / .history-item / #readerContent 时输出
+    try {
+      if (t && t.closest) {
+        if (t.closest('.shelf-item')) console.log('[fanqie] click shelf-item, view=', state.view, 'bookId=', t.closest('.shelf-item').dataset && t.closest('.shelf-item').dataset.bookId);
+        if (t.closest('.history-item')) console.log('[fanqie] click history-item, view=', state.view, 'bookId=', t.closest('.history-item').dataset && t.closest('.history-item').dataset.bookId);
+        if (t.closest('#readerContent')) console.log('[fanqie] click readerContent');
+      }
+    } catch (e) {}
     var nav = t.closest ? t.closest('[data-nav]') : null;
     if (nav) {
       var target = nav.dataset.nav;
@@ -1261,21 +1365,24 @@
       if (IS_SIDEBAR) { openBookInEditor(row.dataset.bookId); } else { showBookModal(row.dataset.bookId); }
       return;
     }
-    var shelfCover = t.closest ? t.closest('.shelf-item [data-bookId]') : null;
-    if (shelfCover && state.view === 'shelf') {
-      var bookId = shelfCover.dataset.bookId;
-      if (IS_SIDEBAR) { openBookInEditor(bookId); return; }
+    // 书架：.shelf-item 整块可点（沉浸下也要可读）
+    var shelfItem = t.closest ? t.closest('.shelf-item') : null;
+    if (shelfItem && state.view === 'shelf') {
+      // 删除按钮优先
+      if (t.closest && t.closest('[data-remove]')) {
+        ev.stopPropagation();
+        var rb = t.closest('[data-remove]');
+        call('shelf-remove', { bookId: rb.dataset.remove }).then(function () {
+          state.shelfLocal = state.shelfLocal.filter(function (i) { return i.bookId !== rb.dataset.remove; });
+          renderShelf($('#view'));
+        });
+        return;
+      }
+      var bookId = shelfItem.dataset.bookId;
+      var resumeId = shelfItem.dataset.itemId || '';
+      if (IS_SIDEBAR) { openBookInEditor(bookId, resumeId); return; }
       var local = state.shelfLocal.find(function (i) { return i.bookId === bookId; });
-      enterReader(bookId, local ? local.title : bookId);
-      return;
-    }
-    var rm = t.closest ? t.closest('[data-remove]') : null;
-    if (rm && state.view === 'shelf') {
-      ev.stopPropagation();
-      call('shelf-remove', { bookId: rm.dataset.remove }).then(function () {
-        state.shelfLocal = state.shelfLocal.filter(function (i) { return i.bookId !== rm.dataset.remove; });
-        renderShelf($('#view'));
-      });
+      enterReader(bookId, local ? local.title : bookId, resumeId);
       return;
     }
     // 历史记录：点击条目续读
@@ -1316,6 +1423,28 @@
 
     // 阅读器
     if (state.view === 'reader') {
+      // 抽屉/设置面板关闭按钮
+      if (t.id === 'closeDrawer') {
+        state.drawer = null;
+        state.settingsOpen = false;
+        removeReaderOverlays();
+        return;
+      }
+      // 目录抽屉内点击章节项：跳转章节
+      var chap = t.closest ? t.closest('.drawer .chap') : null;
+      if (chap) {
+        var itemId = chap.dataset.itemId;
+        var idx = state.chapters.findIndex(function (c) { return c.itemId === itemId; });
+        state.chapterIdx = idx;
+        state.drawer = null;
+        state.pageIdx = 0;
+        openChapter(itemId, idx);
+        return;
+      }
+      // 抽屉/设置面板内的其他点击：早返回（不触发翻页/重渲染）
+      if (t.closest && (t.closest('#commentsDrawer') || t.closest('#catalogDrawer') || t.closest('#settingsPop'))) {
+        return;
+      }
       if (t.id === 'readerBack') {
         state.inReader = false;
         state.view = 'bookstore';
@@ -1324,38 +1453,73 @@
         return;
       }
       if (t.id === 'catalogBtn') {
-        state.drawer = state.drawer === 'catalog' ? null : 'catalog';
-        state.settingsOpen = false;
-        renderReader();
-        return;
-      }
-      if (t.id === 'chapterCommentsBtn') {
-        openComments('chapter');
+        // 局部开合目录抽屉（抽屉挂在 document.body，reader 重建不影响）
+        if (state.drawer === 'catalog') { state.drawer = null; removeReaderOverlays(); }
+        else {
+          state.drawer = 'catalog';
+          state.settingsOpen = false;
+          removeReaderOverlays();
+          renderCatalogDrawer();
+        }
         return;
       }
       if (t.id === 'bookCommentsBtn') {
-        openComments('book');
+        // 局部开合书评抽屉（不重复加载：复用缓存）
+        if (state.drawer === 'comments') { state.drawer = null; removeReaderOverlays(); }
+        else {
+          state.drawer = 'comments';
+          state.settingsOpen = false;
+          removeReaderOverlays();
+          // 直接从缓存渲染（不重置已有评论）
+          var cached = _commentsCache[state.readerBookId];
+          if (cached && !cached.loading) {
+            state.comments = cached.comments || [];
+            state.commentsLoading = false;
+            state.commentsError = cached.error || null;
+          } else {
+            state.comments = [];
+            state.commentsLoading = true;
+            state.commentsError = null;
+          }
+          renderCommentsDrawer();
+          loadBookComments(false);
+        }
         return;
       }
       if (t.id === 'settingsBtn') {
-        state.settingsOpen = !state.settingsOpen;
-        state.drawer = null;
-        renderReader();
+        // 局部开合设置面板（设置面板挂在 document.body）
+        if (state.settingsOpen) { state.settingsOpen = false; removeReaderOverlays(); }
+        else {
+          state.settingsOpen = true;
+          state.drawer = null;
+          removeReaderOverlays();
+          renderSettingsPop();
+        }
+        return;
+      }
+      if (t.id === 'shelfAddInReaderBtn') {
+        // 阅读器内：一键加入（云端）书架
+        var b = state.readerBookId;
+        if (!b) return;
+        var bk = t;
+        var oldTxt = bk.textContent;
+        bk.disabled = true;
+        bk.textContent = '…';
+        call('shelf-add', { bookId: b }).then(function (r) {
+          bk.textContent = r && r.remoteOk ? '✓' : '+';
+          bk.title = (r && r.remoteOk) ? '已加入云端书架' : '已加入本地（未登录或云端失败）';
+        }).catch(function (e) {
+          bk.textContent = oldTxt;
+          bk.title = '加入失败：' + e.message;
+        }).then(function () {
+          setTimeout(function () { try { bk.disabled = false; } catch (e) {} }, 1200);
+        });
         return;
       }
       if (t.id === 'closeDrawer') {
         state.drawer = null;
-        renderReader();
-        return;
-      }
-      var cmtTab = t.closest ? t.closest('[data-cmtKind]') : null;
-      if (cmtTab) {
-        state.commentsKind = cmtTab.dataset.cmtKind;
-        state.comments = [];
-        state.commentsLoading = true;
-        state.commentsError = null;
-        renderReader();
-        loadComments();
+        state.settingsOpen = false;
+        removeReaderOverlays();
         return;
       }
       var chap = t.closest ? t.closest('.drawer .chap') : null;
@@ -1372,21 +1536,24 @@
       if (t.id === 'nextPage') { navPage(1); return; }
       if (t.id === 'prevChapter') { prevChapter(); return; }
       if (t.id === 'nextChapter') { nextChapter(); return; }
-      var para = t.closest ? t.closest('p[data-paraIdx]') : null;
-      if (para) {
-        var pIdx = Number(para.dataset.paraIdx);
-        // 点击段落 → 查看段评
-        $$('p[data-paraIdx]').forEach(function (p) { p.classList.remove('active'); });
-        para.classList.add('active');
-        openComments('paragraph', pIdx);
-        return;
-      }
       var themeChip = t.closest ? t.closest('[data-theme]') : null;
       if (themeChip) {
         state.settings.theme = themeChip.dataset.theme;
         saveSettings();
         renderReader();
         return;
+      }
+      // 点击正文：左右两侧翻页（沉浸式快速翻页）
+      // 委托到 #readerContent：点中正文（无论 .page-wrap / .page / .para-click）即触发
+      // 沉浸模式无"中间切工具栏"——中间点击无副作用
+      var bodyArea = t.closest ? (t.closest('#readerContent') || t.closest('.page-wrap') || t.closest('.page') || t.closest('.para-click')) : null;
+      if (bodyArea && !t.closest('.drawer') && !t.closest('.settings-pop') && !t.closest('.reader-bar') && !t.closest('.reader-footer')) {
+        var rect = bodyArea.getBoundingClientRect();
+        var x = ev.clientX - rect.left;
+        var w = rect.width || 1;
+        if (x < w * 0.3) { navPage(-1); return; }
+        if (x > w * 0.7) { navPage(1); return; }
+        return; // 中间区域：无操作
       }
     }
 
@@ -1404,19 +1571,6 @@
     }
   });
 
-  // 阅读器内点击内容区空白处：收起抽屉
-  document.addEventListener('click', function (ev) {
-    if (state.view !== 'reader' || !state.drawer) return;
-    var d = $('#catalogDrawer') || $('#commentsDrawer');
-    if (d && !d.contains(ev.target)) {
-      var isBar = ev.target.closest && (ev.target.closest('.reader-bar') || ev.target.closest('.reader-footer') || ev.target.closest('.navbar'));
-      if (!isBar) {
-        state.drawer = null;
-        renderReader();
-      }
-    }
-  });
-
   // 设置控件 & 登录输入
   document.addEventListener('input', function (ev) {
     var t = ev.target;
@@ -1424,18 +1578,21 @@
       state.settings.fontSize = Number(t.value);
       saveSettings();
       if (state.view === 'reader') {
+        // 只更新字体与分页，不重建阅读器（避免面板闪烁）
+        applySettings();
         state.pages = paginate(state.chapter ? state.chapter.paragraphs : []);
         state.pageIdx = Math.min(state.pageIdx, Math.max(0, state.pages.length - 1));
-        renderReader();
+        renderPage();
       }
     }
     if (t.id === 'lineHeightRange') {
       state.settings.lineHeight = Number(t.value);
       saveSettings();
       if (state.view === 'reader') {
+        applySettings();
         state.pages = paginate(state.chapter ? state.chapter.paragraphs : []);
         state.pageIdx = Math.min(state.pageIdx, Math.max(0, state.pages.length - 1));
-        renderReader();
+        renderPage();
       }
     }
   });
@@ -1456,8 +1613,11 @@
     else if (ctrl && ev.key === 'ArrowLeft') { ev.preventDefault(); prevChapter(); }
     else if (ctrl && ev.key === 'ArrowRight') { ev.preventDefault(); nextChapter(); }
     else if (ev.key === 'Escape') {
-      if (state.drawer) { state.drawer = null; renderReader(); }
-      else if (state.settingsOpen) { state.settingsOpen = false; renderReader(); }
+      if (state.drawer || state.settingsOpen) {
+        state.drawer = null;
+        state.settingsOpen = false;
+        removeReaderOverlays();
+      }
     }
   });
 
@@ -1547,6 +1707,7 @@
   function refreshShelfCache() {
     call('shelf-local-get', {}).then(function (items) {
       state.shelfLocal = items || [];
+      sortShelfLocal();
     }).catch(function () { /* ignore */ });
   }
 

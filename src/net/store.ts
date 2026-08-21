@@ -106,17 +106,17 @@ export interface ReaderSettings {
   fontSize: number;
   lineHeight: number;
   theme: 'day' | 'night' | 'sepia';
-  showBars: boolean;
 }
 
 export function defaultReaderSettings(): ReaderSettings {
-  // 默认夜间主题，低调不刺眼，适合摸鱼
-  return { fontSize: 19, lineHeight: 1.9, theme: 'night', showBars: true };
+  // 沉浸式阅读（只显示极简顶栏 + 全屏正文），夜间主题低调不刺眼
+  return { fontSize: 19, lineHeight: 1.9, theme: 'night' };
 }
 
 export function getReaderSettings(): ReaderSettings {
   const s = globalState?.get<ReaderSettings>(SETTINGS_KEY);
-  return { ...defaultReaderSettings(), ...(s ?? {}) };
+  const merged: ReaderSettings = { ...defaultReaderSettings(), ...(s ?? {}) };
+  return merged;
 }
 
 export async function setReaderSettings(s: ReaderSettings): Promise<void> {
