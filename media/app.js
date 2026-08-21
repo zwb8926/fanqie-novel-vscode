@@ -825,27 +825,24 @@
 
   function renderReader() {
     applySettings();
-    // 1.2.2+ 阅读器只保留沉浸式（极简顶栏 + 全屏正文），不再有"完整工具栏"模式
+    // 1.2.2+ 阅读器只保留沉浸式（章节名横条作为最顶栏 + 全屏正文），不再有"完整工具栏"模式
     app.innerHTML = '';
-    var nav = el('div', 'navbar');
-    var back = el('button', 'btn ghost', '‹ 返回');
-    back.id = 'readerBack';
-    nav.appendChild(back);
-    nav.appendChild(el('span', 'brand', '🍅 阅读'));
-    nav.appendChild(el('span', 'spacer'));
-    var catalogBtn = el('button', 'nav-tab', '目录');
-    catalogBtn.id = 'catalogBtn';
-    nav.appendChild(catalogBtn);
-    app.appendChild(nav);
 
     var reader = el('div', 'reader');
     reader.id = 'reader';
     reader.classList.add('immersive'); // 永远沉浸
 
-    // 极简顶栏：章节名居中 + 左右翻页秃瓢箭头 + 右侧书评/加入书架/设置
+    // 最顶栏：返回 + 章节名(居中) + 目录 + 书评 + 加入书架 + 设置
+    // 翻页秃瓢放在章节名左右
     var bar = el('div', 'reader-bar minimal');
     bar.id = 'readerBar';
+    // 左侧：返回 + 翻页（上章/上页）
     var leftGroup = el('div', 'reader-bar-group');
+    var back = el('button', 'reader-bar-icon');
+    back.id = 'readerBack';
+    back.title = '返回';
+    back.textContent = '‹';
+    leftGroup.appendChild(back);
     var prevC = el('button', 'reader-bar-icon');
     prevC.id = 'prevChapter';
     prevC.title = '上一章';
@@ -857,6 +854,7 @@
     leftGroup.appendChild(prevC);
     leftGroup.appendChild(prevP);
     bar.appendChild(leftGroup);
+    // 中间：章节名(居中)
     var titles = el('div', 'titles');
     var chapTitle = (state.chapter && state.chapter.title) || state.readerBookTitle || '加载中…';
     titles.appendChild(el('div', 'bt', chapTitle));
@@ -865,6 +863,7 @@
       (state.chapter && state.chapter.chapterWordNumber ? ' · ' + fmtWord(state.chapter.chapterWordNumber) : '');
     if (sub) titles.appendChild(el('div', 'bs', sub));
     bar.appendChild(titles);
+    // 右侧：翻页（下页/下章）+ 目录 + 书评 + 加入书架 + 设置
     var rightGroup = el('div', 'reader-bar-group');
     var nextP = el('button', 'reader-bar-icon');
     nextP.id = 'nextPage';
@@ -878,6 +877,11 @@
     rightGroup.appendChild(nextC);
     bar.appendChild(rightGroup);
     var toolGroup = el('div', 'reader-bar-group');
+    var catalogBtn = el('button', 'reader-bar-icon');
+    catalogBtn.id = 'catalogBtn';
+    catalogBtn.title = '目录';
+    catalogBtn.textContent = '☰';
+    toolGroup.appendChild(catalogBtn);
     var cmtBtn = el('button', 'reader-bar-icon');
     cmtBtn.id = 'bookCommentsBtn';
     cmtBtn.title = '书评';
@@ -1095,15 +1099,31 @@
   }
 
   /* ---------------- 书评 ---------------- */
-  function loadBookComments() {
-    var p = call('book-comments', { bookId: state.readerBookId, limit: 12 });
+  // 缓存已加载过的评论（按 bookId 索引），避免重复打开时重新拉取
+  var _commentsCache = Object.create(null);
+  function loadBookComments(force) {
+    var bookId = state.readerBookId;
+    if (!force && _commentsCache[bookId] && !_commentsCache[bookId].loading) {
+      state.comments = _commentsCache[bookId].comments || [];
+      state.commentsLoading = false;
+      state.commentsError = _commentsCache[bookId].error || null;
+      renderCommentsDrawer($('#reader'));
+      return;
+    }
+    _commentsCache[bookId] = { loading: true, comments: [], error: null };
+    state.commentsLoading = true;
+    state.commentsError = null;
+    renderCommentsDrawer($('#reader'));
+    var p = call('book-comments', { bookId: bookId, limit: 12 });
     p.then(function (r) {
       state.comments = (r && r.comments) || [];
       state.commentsLoading = false;
+      _commentsCache[bookId] = { loading: false, comments: state.comments, error: null };
       renderCommentsDrawer($('#reader'));
     }).catch(function (e) {
       state.commentsLoading = false;
       state.commentsError = e.message;
+      _commentsCache[bookId] = { loading: false, comments: state.comments, error: e.message };
       renderCommentsDrawer($('#reader'));
     });
   }
@@ -1331,6 +1351,28 @@
 
     // 阅读器
     if (state.view === 'reader') {
+      // 抽屉/设置面板关闭按钮
+      if (t.id === 'closeDrawer') {
+        state.drawer = null;
+        state.settingsOpen = false;
+        removeReaderOverlays();
+        return;
+      }
+      // 目录抽屉内点击章节项：跳转章节
+      var chap = t.closest ? t.closest('.drawer .chap') : null;
+      if (chap) {
+        var itemId = chap.dataset.itemId;
+        var idx = state.chapters.findIndex(function (c) { return c.itemId === itemId; });
+        state.chapterIdx = idx;
+        state.drawer = null;
+        state.pageIdx = 0;
+        openChapter(itemId, idx);
+        return;
+      }
+      // 抽屉/设置面板内的其他点击：早返回（不触发翻页/重渲染）
+      if (t.closest && (t.closest('#commentsDrawer') || t.closest('#catalogDrawer') || t.closest('#settingsPop'))) {
+        return;
+      }
       if (t.id === 'readerBack') {
         state.inReader = false;
         state.view = 'bookstore';
@@ -1350,17 +1392,25 @@
         return;
       }
       if (t.id === 'bookCommentsBtn') {
-        // 局部开合书评抽屉
+        // 局部开合书评抽屉（不重复加载：复用缓存）
         if (state.drawer === 'comments') { state.drawer = null; removeReaderOverlays(); }
         else {
           state.drawer = 'comments';
           state.settingsOpen = false;
           removeReaderOverlays();
-          state.comments = [];
-          state.commentsLoading = true;
-          state.commentsError = null;
+          // 直接从缓存渲染（不重置已有评论）
+          var cached = _commentsCache[state.readerBookId];
+          if (cached && !cached.loading) {
+            state.comments = cached.comments || [];
+            state.commentsLoading = false;
+            state.commentsError = cached.error || null;
+          } else {
+            state.comments = [];
+            state.commentsLoading = true;
+            state.commentsError = null;
+          }
           renderCommentsDrawer($('#reader'));
-          loadBookComments();
+          loadBookComments(false);
         }
         return;
       }
