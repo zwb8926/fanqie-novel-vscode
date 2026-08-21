@@ -1186,7 +1186,7 @@
     swB.appendChild(off);
     row4.appendChild(swB);
     pop.appendChild(row4);
-    var hint = el('div', 'key-hint', '键盘：←/→ 翻页 · Ctrl+←/→ 切换章节 · 点击正文切换工具栏显示/隐藏');
+    var hint = el('div', 'key-hint', '键盘：←/→ 翻页 · Ctrl+←/→ 切换章节 · 点击正文：左右翻页、中间切换工具栏');
     pop.appendChild(hint);
     root.appendChild(pop);
   }
@@ -1363,9 +1363,14 @@
         renderReader();
         return;
       }
-      // 点击正文：切换工具栏显隐（沉浸模式）
-      var inBody = t.closest ? (t.closest('.page-wrap') || t.closest('.reader-content')) : null;
-      if (inBody && !t.closest('.drawer') && !t.closest('.settings-pop')) {
+      // 点击正文：左右两侧翻页，中间切换工具栏显隐（沉浸式快速翻页，不占界面）
+      var bodyWrap = t.closest ? t.closest('.page-wrap') : null;
+      if (bodyWrap && !t.closest('.drawer') && !t.closest('.settings-pop') && !t.closest('.reader-bar') && !t.closest('.reader-footer')) {
+        var rect = bodyWrap.getBoundingClientRect();
+        var x = ev.clientX - rect.left;
+        var w = rect.width || 1;
+        if (x < w * 0.3) { navPage(-1); return; }
+        if (x > w * 0.7) { navPage(1); return; }
         state.settings.showBars = !state.settings.showBars;
         saveSettings();
         renderReader();
