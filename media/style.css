@@ -208,6 +208,13 @@ body {
 .reader-bar .titles { flex: 1; min-width: 0; }
 .reader-bar .bt { font-weight: 600; font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .reader-bar .bs { font-size: 11px; color: var(--fg2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* 沉浸式：极简横条（只显示章节名 + 书名·第X章），不占翻页区，可点中间呼出/隐藏完整工具栏 */
+.reader-bar.minimal { padding: 6px 14px; border-bottom: none; opacity: 0.85; cursor: pointer; }
+.reader-bar.minimal:hover { opacity: 1; }
+.reader-bar.minimal .bt { font-size: 13px; }
+.reader-bar-mini-spacer { flex: 1; }
+.reader-bar-more { background: transparent; border: 0; color: var(--fg2); cursor: pointer; font-size: 14px; padding: 0 4px; }
+.reader-bar-more:hover { color: var(--accent); }
 .reader-content { flex: 1; overflow: hidden; position: relative; }
 .page-wrap { position: absolute; inset: 0; overflow-y: auto; padding: 6px 26px 16px; }
 .page {

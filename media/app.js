@@ -419,25 +419,29 @@
       if (state.shelfLocal.length) {
         state.shelfLocal.forEach(function (it) {
           var item = el('div', 'shelf-item');
+          // 整个 .shelf-item 自己就是点击目标（不再依赖子元素选择器）
           item.dataset.bookId = it.bookId;
           item.dataset.itemId = it.lastReadItemId || '';
+          item.dataset.action = 'open';
+          item.title = '点击继续阅读';
           var img = el('img', 'cover');
           if (it.coverUrl) { img.src = it.coverUrl; img.onerror = coverFallback; }
           else img.style.background = 'linear-gradient(135deg,#ff6b3d,#ff3d2e)';
-          img.dataset.bookId = it.bookId;
           var rm = el('button', 'remove', '✕');
           rm.dataset.remove = it.bookId;
           var title = el('div', 'title', it.title || it.bookId);
-          title.dataset.bookId = it.bookId;
-          item.appendChild(rm);
-          item.appendChild(img);
-          item.appendChild(title);
           if (it.lastReadChapterTitle) {
             var rd = el('div', 'reading', '读到：' + it.lastReadChapterTitle);
-            rd.dataset.bookId = it.bookId;
+            item.appendChild(rm);
+            item.appendChild(img);
+            item.appendChild(title);
             item.appendChild(rd);
           } else {
-            item.appendChild(el('div', 'meta', it.author || ''));
+            var meta = el('div', 'meta', it.author || '');
+            item.appendChild(rm);
+            item.appendChild(img);
+            item.appendChild(title);
+            item.appendChild(meta);
           }
           grid.appendChild(item);
         });
@@ -451,19 +455,19 @@
         if (state.shelfRemote.length) {
           state.shelfRemote.forEach(function (it) {
             var item = el('div', 'shelf-item');
+            // 整块可点
             item.dataset.bookId = it.book_id;
             item.dataset.itemId = it.last_read_item_id || '';
+            item.dataset.action = 'open';
+            item.title = '点击继续阅读';
             var img = el('img', 'cover');
             if (it.cover_url) { img.src = it.cover_url; img.onerror = coverFallback; }
             else img.style.background = 'linear-gradient(135deg,#888,#aaa)';
-            img.dataset.bookId = it.book_id;
             var t = el('div', 'title', it.title || it.book_id);
-            t.dataset.bookId = it.book_id;
             item.appendChild(img);
             item.appendChild(t);
             if (it.current_chapter_title) {
               var rd = el('div', 'reading', '读到：' + it.current_chapter_title);
-              rd.dataset.bookId = it.book_id;
               item.appendChild(rd);
             } else if (it.author) {
               item.appendChild(el('div', 'meta', it.author));
@@ -844,18 +848,33 @@
     var reader = el('div', 'reader');
     reader.id = 'reader';
     reader.classList.toggle('immersive', !showBars);
-    // 标题栏
+    // 标题栏：沉浸式下也保留一条极简章节名横条（不占翻页区）
+    var bar = el('div', 'reader-bar' + (showBars ? '' : ' minimal'));
+    bar.id = 'readerBar';
+    var titles = el('div', 'titles');
+    var chapTitle = (state.chapter && state.chapter.title) || state.readerBookTitle || '加载中…';
+    titles.appendChild(el('div', 'bt', chapTitle));
     if (showBars) {
-      var bar = el('div', 'reader-bar');
-      var titles = el('div', 'titles');
-      titles.appendChild(el('div', 'bt', (state.chapter && state.chapter.title) || state.readerBookTitle || '加载中…'));
       titles.appendChild(el('div', 'bs',
         (state.readerBookTitle || '') +
         (state.chapter && state.chapter.realChapterOrder ? ' · 第' + state.chapter.realChapterOrder + '章' : '') +
         (state.chapter && state.chapter.chapterWordNumber ? ' · ' + fmtWord(state.chapter.chapterWordNumber) : '')));
-      bar.appendChild(titles);
-      reader.appendChild(bar);
+    } else {
+      // 沉浸式：极简副标题（书名 · 第X章），点击横条可呼出/隐藏完整工具栏
+      var sub = (state.readerBookTitle || '') +
+        (state.chapter && state.chapter.realChapterOrder ? ' · 第' + state.chapter.realChapterOrder + '章' : '');
+      if (sub) titles.appendChild(el('div', 'bs', sub));
     }
+    bar.appendChild(titles);
+    // 沉浸式：右侧加一个小 ⚙ 按钮，方便呼出设置
+    if (!showBars) {
+      var more = el('button', 'reader-bar-more');
+      more.id = 'settingsBtn';
+      more.title = '设置';
+      more.textContent = '⚙';
+      bar.appendChild(more);
+    }
+    reader.appendChild(bar);
     // 内容
     var content = el('div', 'reader-content');
     content.id = 'readerContent';
@@ -1200,6 +1219,14 @@
 
   document.addEventListener('click', function (ev) {
     var t = ev.target;
+    // 调试日志：点中 .shelf-item / .history-item / #readerContent 时输出
+    try {
+      if (t && t.closest) {
+        if (t.closest('.shelf-item')) console.log('[fanqie] click shelf-item, view=', state.view, 'bookId=', t.closest('.shelf-item').dataset && t.closest('.shelf-item').dataset.bookId);
+        if (t.closest('.history-item')) console.log('[fanqie] click history-item, view=', state.view, 'bookId=', t.closest('.history-item').dataset && t.closest('.history-item').dataset.bookId);
+        if (t.closest('#readerContent')) console.log('[fanqie] click readerContent');
+      }
+    } catch (e) {}
     var nav = t.closest ? t.closest('[data-nav]') : null;
     if (nav) {
       var target = nav.dataset.nav;
@@ -1255,22 +1282,24 @@
       if (IS_SIDEBAR) { openBookInEditor(row.dataset.bookId); } else { showBookModal(row.dataset.bookId); }
       return;
     }
-    var shelfCover = t.closest ? t.closest('.shelf-item [data-bookId]') : null;
-    if (shelfCover && state.view === 'shelf') {
-      var bookId = shelfCover.dataset.bookId;
-      var resumeId = shelfCover.closest('.shelf-item').dataset.itemId || '';
+    // 书架：.shelf-item 整块可点（沉浸下也要可读）
+    var shelfItem = t.closest ? t.closest('.shelf-item') : null;
+    if (shelfItem && state.view === 'shelf') {
+      // 删除按钮优先
+      if (t.closest && t.closest('[data-remove]')) {
+        ev.stopPropagation();
+        var rb = t.closest('[data-remove]');
+        call('shelf-remove', { bookId: rb.dataset.remove }).then(function () {
+          state.shelfLocal = state.shelfLocal.filter(function (i) { return i.bookId !== rb.dataset.remove; });
+          renderShelf($('#view'));
+        });
+        return;
+      }
+      var bookId = shelfItem.dataset.bookId;
+      var resumeId = shelfItem.dataset.itemId || '';
       if (IS_SIDEBAR) { openBookInEditor(bookId, resumeId); return; }
       var local = state.shelfLocal.find(function (i) { return i.bookId === bookId; });
       enterReader(bookId, local ? local.title : bookId, resumeId);
-      return;
-    }
-    var rm = t.closest ? t.closest('[data-remove]') : null;
-    if (rm && state.view === 'shelf') {
-      ev.stopPropagation();
-      call('shelf-remove', { bookId: rm.dataset.remove }).then(function () {
-        state.shelfLocal = state.shelfLocal.filter(function (i) { return i.bookId !== rm.dataset.remove; });
-        renderShelf($('#view'));
-      });
       return;
     }
     // 历史记录：点击条目续读
@@ -1390,15 +1419,21 @@
         renderReader();
         return;
       }
-      // 点击正文：左右两侧翻页，中间切换工具栏显隐（沉浸式快速翻页，不占界面）
-      var bodyWrap = t.closest ? t.closest('.page-wrap') : null;
-      if (bodyWrap && !t.closest('.drawer') && !t.closest('.settings-pop') && !t.closest('.reader-bar') && !t.closest('.reader-footer')) {
-        var rect = bodyWrap.getBoundingClientRect();
+      // 点击正文：左右两侧翻页（沉浸式快速翻页）
+      // 改为委托到 #readerContent：点中正文（无论 .page-wrap / .page / .para-click）即触发
+      var bodyArea = t.closest ? (t.closest('#readerContent') || t.closest('.page-wrap') || t.closest('.page') || t.closest('.para-click')) : null;
+      if (bodyArea && !t.closest('.drawer') && !t.closest('.settings-pop') && !t.closest('.reader-bar') && !t.closest('.reader-footer')) {
+        var rect = bodyArea.getBoundingClientRect();
         var x = ev.clientX - rect.left;
         var w = rect.width || 1;
         if (x < w * 0.3) { navPage(-1); return; }
         if (x > w * 0.7) { navPage(1); return; }
-        state.settings.showBars = !state.settings.showBars;
+        // 中间区域：首次点出工具栏；再次点回沉浸
+        if (state.settings.showBars) {
+          state.settings.showBars = false;
+        } else {
+          state.settings.showBars = true;
+        }
         state.settings.barsTouched = true;
         saveSettings();
         renderReader();
