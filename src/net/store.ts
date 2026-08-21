@@ -106,21 +106,16 @@ export interface ReaderSettings {
   fontSize: number;
   lineHeight: number;
   theme: 'day' | 'night' | 'sepia';
-  showBars: boolean;
-  /** 用户是否主动设置过工具栏（区分旧版本默认值） */
-  barsTouched?: boolean;
 }
 
 export function defaultReaderSettings(): ReaderSettings {
-  // 默认沉浸：隐藏导航/工具栏，点正文即可切换显示；夜间主题低调不刺眼
-  return { fontSize: 19, lineHeight: 1.9, theme: 'night', showBars: false, barsTouched: false };
+  // 沉浸式阅读（只显示极简顶栏 + 全屏正文），夜间主题低调不刺眼
+  return { fontSize: 19, lineHeight: 1.9, theme: 'night' };
 }
 
 export function getReaderSettings(): ReaderSettings {
   const s = globalState?.get<ReaderSettings>(SETTINGS_KEY);
   const merged: ReaderSettings = { ...defaultReaderSettings(), ...(s ?? {}) };
-  // 1.2.2 起默认沉浸：旧版本持久化里 showBars=true 只是默认值，用户未主动设置过 → 强制迁移为沉浸
-  if (!merged.barsTouched) merged.showBars = false;
   return merged;
 }
 

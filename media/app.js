@@ -37,7 +37,7 @@
     view: 'bookstore',
     user: null,
     loggedIn: false,
-    settings: { fontSize: 19, lineHeight: 1.9, theme: 'night', showBars: false, barsTouched: false },
+    settings: { fontSize: 19, lineHeight: 1.9, theme: 'night' },
     // 书城
     rankCats: [],
     rankCatsLoaded: false,
@@ -825,32 +825,26 @@
 
   function renderReader() {
     applySettings();
-    var showBars = state.settings.showBars !== false;
+    // 1.2.2+ 阅读器只保留沉浸式（极简顶栏 + 全屏正文），不再有"完整工具栏"模式
     app.innerHTML = '';
-    if (showBars) {
-      var nav = el('div', 'navbar');
-      var back = el('button', 'btn ghost', '‹ 返回');
-      back.id = 'readerBack';
-      nav.appendChild(back);
-      nav.appendChild(el('span', 'brand', '🍅 阅读'));
-      nav.appendChild(el('span', 'spacer'));
-      // 顶部次级入口：目录仍在这里（章节名横条里放翻页）
-      var catalogBtn = el('button', 'nav-tab', '目录');
-      catalogBtn.id = 'catalogBtn';
-      nav.appendChild(catalogBtn);
-      app.appendChild(nav);
-    }
+    var nav = el('div', 'navbar');
+    var back = el('button', 'btn ghost', '‹ 返回');
+    back.id = 'readerBack';
+    nav.appendChild(back);
+    nav.appendChild(el('span', 'brand', '🍅 阅读'));
+    nav.appendChild(el('span', 'spacer'));
+    var catalogBtn = el('button', 'nav-tab', '目录');
+    catalogBtn.id = 'catalogBtn';
+    nav.appendChild(catalogBtn);
+    app.appendChild(nav);
+
     var reader = el('div', 'reader');
     reader.id = 'reader';
-    reader.classList.toggle('immersive', !showBars);
+    reader.classList.add('immersive'); // 永远沉浸
 
-    // ===== 标题栏：始终显示（沉浸 / 普通一致）=====
-    // 左侧：上一章 / 上一页
-    // 中间：章节名(居中)
-    // 右侧：下一页 / 下一章  ……  书评 / 加入书架 / 设置
-    var bar = el('div', 'reader-bar' + (showBars ? '' : ' minimal'));
+    // 极简顶栏：章节名居中 + 左右翻页秃瓢箭头 + 右侧书评/加入书架/设置
+    var bar = el('div', 'reader-bar minimal');
     bar.id = 'readerBar';
-    // 左侧翻页组
     var leftGroup = el('div', 'reader-bar-group');
     var prevC = el('button', 'reader-bar-icon');
     prevC.id = 'prevChapter';
@@ -863,7 +857,6 @@
     leftGroup.appendChild(prevC);
     leftGroup.appendChild(prevP);
     bar.appendChild(leftGroup);
-    // 中间：章节名(居中)
     var titles = el('div', 'titles');
     var chapTitle = (state.chapter && state.chapter.title) || state.readerBookTitle || '加载中…';
     titles.appendChild(el('div', 'bt', chapTitle));
@@ -872,7 +865,6 @@
       (state.chapter && state.chapter.chapterWordNumber ? ' · ' + fmtWord(state.chapter.chapterWordNumber) : '');
     if (sub) titles.appendChild(el('div', 'bs', sub));
     bar.appendChild(titles);
-    // 右侧翻页组
     var rightGroup = el('div', 'reader-bar-group');
     var nextP = el('button', 'reader-bar-icon');
     nextP.id = 'nextPage';
@@ -885,7 +877,6 @@
     rightGroup.appendChild(nextP);
     rightGroup.appendChild(nextC);
     bar.appendChild(rightGroup);
-    // 工具组：书评 / 加入书架 / 设置
     var toolGroup = el('div', 'reader-bar-group');
     var cmtBtn = el('button', 'reader-bar-icon');
     cmtBtn.id = 'bookCommentsBtn';
@@ -905,10 +896,10 @@
     bar.appendChild(toolGroup);
 
     reader.appendChild(bar);
-    // 内容
     var content = el('div', 'reader-content');
     content.id = 'readerContent';
     reader.appendChild(content);
+    app.appendChild(reader);
     // （底部翻页已合并到顶部"秃瓢"按钮；不再单独渲染 reader-footer）
     app.appendChild(reader);
     renderPage();
@@ -1204,18 +1195,7 @@
     });
     row3.appendChild(sw);
     pop.appendChild(row3);
-    var row4 = el('div', 'row');
-    row4.appendChild(el('span', null, '工具栏'));
-    var swB = el('div', 'theme-switch');
-    var on = el('button', 'chip' + (s.showBars !== false ? ' active' : ''), '显示');
-    on.dataset.showBars = '1';
-    var off = el('button', 'chip' + (s.showBars === false ? ' active' : ''), '隐藏');
-    off.dataset.showBars = '0';
-    swB.appendChild(on);
-    swB.appendChild(off);
-    row4.appendChild(swB);
-    pop.appendChild(row4);
-    var hint = el('div', 'key-hint', '键盘：←/→ 翻页 · Ctrl+←/→ 切换章节 · 点击正文：左右翻页、中间切换工具栏');
+    var hint = el('div', 'key-hint', '键盘：←/→ 翻页 · Ctrl+←/→ 切换章节 · 点击正文：左 30% 上一页 / 右 30% 下一页');
     pop.appendChild(hint);
     root.appendChild(pop);
   }
@@ -1441,16 +1421,9 @@
         renderReader();
         return;
       }
-      var showBarsChip = t.closest ? t.closest('[data-showBars]') : null;
-      if (showBarsChip) {
-        state.settings.showBars = showBarsChip.dataset.showBars === '1';
-        state.settings.barsTouched = true;
-        saveSettings();
-        renderReader();
-        return;
-      }
       // 点击正文：左右两侧翻页（沉浸式快速翻页）
-      // 改为委托到 #readerContent：点中正文（无论 .page-wrap / .page / .para-click）即触发
+      // 委托到 #readerContent：点中正文（无论 .page-wrap / .page / .para-click）即触发
+      // 沉浸模式无"中间切工具栏"——中间点击无副作用
       var bodyArea = t.closest ? (t.closest('#readerContent') || t.closest('.page-wrap') || t.closest('.page') || t.closest('.para-click')) : null;
       if (bodyArea && !t.closest('.drawer') && !t.closest('.settings-pop') && !t.closest('.reader-bar') && !t.closest('.reader-footer')) {
         var rect = bodyArea.getBoundingClientRect();
@@ -1458,16 +1431,7 @@
         var w = rect.width || 1;
         if (x < w * 0.3) { navPage(-1); return; }
         if (x > w * 0.7) { navPage(1); return; }
-        // 中间区域：首次点出工具栏；再次点回沉浸
-        if (state.settings.showBars) {
-          state.settings.showBars = false;
-        } else {
-          state.settings.showBars = true;
-        }
-        state.settings.barsTouched = true;
-        saveSettings();
-        renderReader();
-        return;
+        return; // 中间区域：无操作
       }
     }
 
