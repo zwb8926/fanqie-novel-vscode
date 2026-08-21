@@ -110,8 +110,8 @@ export interface ReaderSettings {
 }
 
 export function defaultReaderSettings(): ReaderSettings {
-  // 默认夜间主题，低调不刺眼，适合摸鱼
-  return { fontSize: 19, lineHeight: 1.9, theme: 'night', showBars: true };
+  // 默认沉浸：隐藏导航/工具栏，点正文即可切换显示；夜间主题低调不刺眼
+  return { fontSize: 19, lineHeight: 1.9, theme: 'night', showBars: false };
 }
 
 export function getReaderSettings(): ReaderSettings {

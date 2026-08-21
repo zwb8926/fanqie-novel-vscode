@@ -197,7 +197,8 @@ body {
 .modal .actions { display: flex; gap: 10px; margin-top: 16px; }
 
 /* ============ 阅读器 ============ */
-.reader { position: relative; height: 100%; display: flex; flex-direction: column; background: var(--reader-bg); }
+.reader { position: relative; flex: 1; min-height: 0; display: flex; flex-direction: column; background: var(--reader-bg); }
+.reader.immersive { cursor: default; }
 .reader-bar {
   display: flex; align-items: center; gap: 10px; padding: 8px 12px;
   background: var(--reader-bg); border-bottom: 1px solid var(--border); z-index: 30;
@@ -214,11 +215,6 @@ body {
   display: flex; flex-direction: column; justify-content: flex-start;
 }
 .page p { margin: 0 0 0.9em; text-indent: 2em; font-size: var(--reader-font-size, 19px); line-height: var(--reader-line-height, 1.9); color: var(--reader-fg); }
-.page p.para-click { cursor: pointer; border-radius: 4px; }
-.page p.para-click:hover { background: rgba(255, 61, 46, 0.07); }
-.page p.para-click.active { background: rgba(255, 61, 46, 0.12); }
-.page p.para-click .seg-badge { font-size: 10px; color: var(--accent); margin-right: 4px; vertical-align: super; opacity: 0.75; }
-.page p.para-click:hover .seg-badge { opacity: 1; }
 .reader-footer {
   display: flex; align-items: center; gap: 8px; padding: 8px 12px;
   background: var(--reader-bg); border-top: 1px solid var(--border); z-index: 30;

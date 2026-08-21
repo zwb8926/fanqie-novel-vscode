@@ -4,7 +4,7 @@
  */
 import * as vscode from 'vscode';
 import * as api from '../api/fanqie';
-import { getChapterComments, getParagraphComments, BookComment } from '../api/fanqie';
+import { BookComment } from '../api/fanqie';
 import { logout, QrStatus, startQrLogin, pollQrLogin, finalizeLogin, QrTicket } from '../auth/qr';
 import {
   getLocalShelf,
@@ -178,12 +178,28 @@ async function handleMessage(webview: vscode.Webview, msg: any): Promise<void> {
     case 'shelf-add': {
       const bookId = String(msg.bookId ?? '');
       const local = await getLocalShelf();
-      const detail = await api.getBookDetail(bookId);
+      // 封面优先用 simple/info（稳定 CDN 图，非签名 URL），失败再退回详情接口
+      let title = '', author = '', coverUrl = '';
+      const si = await api.getBookSimpleInfo([bookId]);
+      if (si[0] && si[0].book_name) {
+        title = si[0].book_name;
+        author = si[0].author_name;
+        coverUrl = si[0].thumb_url;
+      } else {
+        try {
+          const detail = await api.getBookDetail(bookId);
+          title = detail.book_name;
+          author = detail.author;
+          coverUrl = detail.thumb_url;
+        } catch {
+          /* 保持空，前端显示渐变占位 */
+        }
+      }
       const item: LocalShelfItem = {
         bookId,
-        title: detail.book_name,
-        author: detail.author,
-        coverUrl: detail.thumb_url,
+        title,
+        author,
+        coverUrl,
         addedAt: Date.now(),
       };
       if (!local.some(i => i.bookId === bookId)) {
@@ -233,20 +249,6 @@ async function handleMessage(webview: vscode.Webview, msg: any): Promise<void> {
         }
       }
       post(true, { comments });
-      break;
-    }
-    case 'chapter-comments': {
-      const r = await getChapterComments(String(msg.bookId ?? ''), String(msg.itemId ?? ''), Number(msg.page ?? 0));
-      post(true, r);
-      break;
-    }
-    case 'paragraph-comments': {
-      const list = await getParagraphComments(
-        String(msg.bookId ?? ''),
-        String(msg.itemId ?? ''),
-        Number(msg.paragraphIndex ?? 0)
-      );
-      post(true, { comments: list });
       break;
     }
 
