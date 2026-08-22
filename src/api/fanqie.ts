@@ -384,25 +384,48 @@ function normalizeDirectory(d: any, bookId: string): Directory {
 
 /* ---------------------------------- 章节 ---------------------------------- */
 
-/** 把正文 HTML 拆成段落数组，并做 PUA 字体解密 */
+/** 把正文 HTML 拆成段落数组，并做 PUA 字体解密。
+ *  设计目标：兼容风控接口、SSR 阅读页、第三方源对正文的多种“半结构化”返回。
+ *  - 块级标签（p, div, h1-h6, li, blockquote, pre, hr）作为段落分隔
+ *  - br 视为换行（不再把整章压成一段）
+ *  - 容忍标签属性里的空白、大小写、孤立 lt/gt 字符、HTML 注释、PI
+ *  - 数字/十六进制实体也解码
+ */
 export function htmlToParagraphs(content: string): string[] {
   if (!content) return [];
-  const withoutTags = content
-    .replace(/<br\s*\/?>/gi, '\n')
-    .replace(/<\/p>/gi, '\n')
-    .replace(/<[^>]+>/g, '')
-    .replace(/&nbsp;/g, ' ')
+  // 1) 先把块级开始/结束/自闭标签统一为 \n；br 也换行
+  let txt = content
+    .replace(/<\s*br\s*\/?\s*>/gi, '\n')
+    .replace(/<\/\s*(p|div|h[1-6]|li|blockquote|pre|tr|td|th|section|article)\s*>/gi, '\n')
+    .replace(/<\s*(p|div|h[1-6]|li|blockquote|pre|hr|tr|td|th|section|article)[^>]*>/gi, '\n')
+    // 2) 删掉剩余所有标签（含未配对的碎片）
+    .replace(/<[^>]*>/g, '')
+    // 3) 删掉 HTML 注释 / 处理指令
+    .replace(/<![\s\S]*?>/g, '')
+    .replace(/<\?[\s\S]*?\?>/g, '')
+    // 4) 实体解码（注意顺序：&amp; 必须先解，否则后续会把别人的 &lt; 变成 <<）
     .replace(/&amp;/g, '&')
     .replace(/&lt;/g, '<')
     .replace(/&gt;/g, '>')
     .replace(/&quot;/g, '"')
+    .replace(/&apos;/g, "'")
+    .replace(/&nbsp;/g, ' ')
     .replace(/&#39;/g, "'")
-    .replace(/<em>/gi, '');
-  const paras = withoutTags
+    .replace(/&#(\d+);/g, (_, n) => {
+      const code = Number(n);
+      return Number.isFinite(code) && code > 0 ? String.fromCharCode(code) : '';
+    })
+    .replace(/&#x([0-9a-f]+);/gi, (_, n) => {
+      const code = parseInt(n, 16);
+      return Number.isFinite(code) && code > 0 ? String.fromCharCode(code) : '';
+    });
+  // 5) 兜底：删掉任何残留的孤立 lt（异常输入下正则没匹配干净时不再让标签进文本）；gt 保留（可能出现在正常文本里，如 1>0）
+  txt = txt.replace(/<\s*$/gm, '').replace(/<\s*[a-zA-Z!/][^\n]{0,200}$/gm, '');
+  const paras = txt
     .split(/\n+/)
-    .map(s => s.trim())
+    .map(s => s.replace(/<+/g, '').trim()) // 再清一次残留 lt 链
     .filter(Boolean);
-  return paras.length ? paras : [withoutTags.trim()].filter(Boolean);
+  return paras.length ? paras : [txt.trim()].filter(Boolean);
 }
 
 export async function getChapter(itemId: string): Promise<ChapterData> {

@@ -1583,9 +1583,7 @@
       if (state.view === 'reader') {
         // 只更新字体与分页，不重建阅读器（避免面板闪烁）
         applySettings();
-        state.pages = paginate(state.chapter ? state.chapter.paragraphs : []);
-        state.pageIdx = Math.min(state.pageIdx, Math.max(0, state.pages.length - 1));
-        renderPage();
+        rePaginate();
       }
     }
     if (t.id === 'lineHeightRange') {
@@ -1593,9 +1591,7 @@
       saveSettings();
       if (state.view === 'reader') {
         applySettings();
-        state.pages = paginate(state.chapter ? state.chapter.paragraphs : []);
-        state.pageIdx = Math.min(state.pageIdx, Math.max(0, state.pages.length - 1));
-        renderPage();
+        rePaginate();
       }
     }
   });
@@ -1714,9 +1710,43 @@
     }).catch(function () { /* ignore */ });
   }
 
+  // 重新分页（按当前容器尺寸重算，state.pageIdx 尽量保持在原章节内同一相对位置）
+  function rePaginate() {
+    if (!state.chapter) return;
+    var oldPages = state.pages;
+    var oldPageIdx = state.pageIdx;
+    state.pages = paginate(state.chapter.paragraphs || []);
+    if (!state.pages.length) { state.pageIdx = 0; renderPage(); return; }
+    // 按"段落在全书中的累计位置"折算新页：找到旧页里第一个段落 idx，再在新页里定位到包含同一 idx 的页
+    var keepIdx = oldPageIdx;
+    if (oldPages.length && oldPages[oldPageIdx] && oldPages[oldPageIdx][0]) {
+      var anchorPara = oldPages[oldPageIdx][0].idx;
+      for (var i = 0; i < state.pages.length; i++) {
+        if (state.pages[i].some(function (p) { return p.idx === anchorPara; })) {
+          keepIdx = i; break;
+        }
+      }
+    }
+    state.pageIdx = Math.max(0, Math.min(keepIdx, state.pages.length - 1));
+    renderPage();
+  }
+
   // 初始渲染
   applySettings();
   render();
+  // 窗口尺寸变化时（webview 高度可能因为编辑器拖拽、侧边栏显隐、状态栏高度等变化）重新分页
+  var _resizeRaf = 0;
+  function _onResize() {
+    if (_resizeRaf) return;
+    _resizeRaf = requestAnimationFrame(function () {
+      _resizeRaf = 0;
+      if (state.view === 'reader' && state.chapter) rePaginate();
+    });
+  }
+  window.addEventListener('resize', _onResize);
+  if (window.visualViewport) {
+    window.visualViewport.addEventListener('resize', _onResize);
+  }
   call('login-status', {}).then(function (r) {
     state.user = r.user;
     state.loggedIn = !!r.loggedIn;
