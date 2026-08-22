@@ -7,3 +7,4 @@ scripts/
 research/
 .git-ssh/
 .git/**
+.*
