@@ -20,7 +20,7 @@ export function buildHtml(webview: vscode.Webview, extensionUri: vscode.Uri, hos
 <meta charset="UTF-8">
 <meta http-equiv="Content-Security-Policy" content="${csp}">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>番茄小说</title>
+<title>fanqie</title>
 <link rel="stylesheet" href="${media('style.css')}">
 </head>
 <body data-host="${host}">

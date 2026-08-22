@@ -15,12 +15,13 @@ export function openPanel(context: vscode.ExtensionContext, view?: string): void
     }
     return;
   }
-  panel = vscode.window.createWebviewPanel('fanqie', '番茄小说', vscode.ViewColumn.Active, {
+  panel = vscode.window.createWebviewPanel('fanqie', 'fanqie', vscode.ViewColumn.Active, {
     enableScripts: true,
     retainContextWhenHidden: true,
     localResourceRoots: [vscode.Uri.joinPath(context.extensionUri, 'media')],
   });
-  panel.iconPath = vscode.Uri.joinPath(context.extensionUri, 'media', 'icon.png');
+  // 标题栏图标：使用单色 SVG（VS Code 根据主题自动染色），不再使用彩色 PNG
+  panel.iconPath = vscode.Uri.joinPath(context.extensionUri, 'media', 'fanqie.svg');
   panel.webview.html = buildHtml(panel.webview, context.extensionUri, 'panel');
   panel.onDidDispose(() => {
     panel = undefined;

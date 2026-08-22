@@ -1,7 +1,7 @@
 <svg width="24" height="24" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
-  <!-- 番茄：主体 + 果柄 + 两片叶子（活动栏图标按蒙版着色，使用纯黑填充） -->
-  <circle cx="12" cy="14.2" r="7.4" fill="#000000"/>
+  <!-- 番茄：白色主体 + 黑色描边 + 黑色果柄/叶子（标题栏图标在深色背景下也清晰） -->
+  <circle cx="12" cy="14.2" r="7.4" fill="#FFFFFF" stroke="#000000" stroke-width="0.8"/>
   <rect x="11.1" y="4.6" width="1.8" height="4.4" rx="0.9" fill="#000000"/>
-  <path d="M12 5.6 C9.6 3.2 5.8 3.4 4 5.2 C6.6 7 9.6 7.2 12 5.6 Z" fill="#000000"/>
-  <path d="M12 5.6 C14.4 3.2 18.2 3.4 20 5.2 C17.4 7 14.4 7.2 12 5.6 Z" fill="#000000"/>
+  <path d="M12 5.6 C9.6 3.2 5.8 3.4 4 5.2 C6.6 7 9.6 7.2 12 5.6 Z" fill="#000000" stroke="#000000" stroke-width="0.5" stroke-linejoin="round"/>
+  <path d="M12 5.6 C14.4 3.2 18.2 3.4 20 5.2 C17.4 7 14.4 7.2 12 5.6 Z" fill="#000000" stroke="#000000" stroke-width="0.5" stroke-linejoin="round"/>
 </svg>

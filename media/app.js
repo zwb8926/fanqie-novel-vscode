@@ -971,8 +971,11 @@
     var content = el('div', 'reader-content');
     content.id = 'readerContent';
     reader.appendChild(content);
-    app.appendChild(reader);
-    // （底部翻页已合并到顶部"秃瓢"按钮；不再单独渲染 reader-footer）
+    // 底部页码指示（极小，不占翻页区）
+    var pageInfo = el('div', 'reader-pageinfo');
+    pageInfo.id = 'pageInfo';
+    pageInfo.textContent = '-- / --';
+    reader.appendChild(pageInfo);
     app.appendChild(reader);
     renderPage();
 
