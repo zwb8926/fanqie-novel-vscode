@@ -1541,8 +1541,9 @@
     // 阅读器
     if (state.view === 'reader') {
       // 主题切换 chips 优先处理（必须在 settingsPop 早返回之前，否则被拦截）
-      var themeChip = t.closest ? t.closest('[data-theme]') : null;
-      if (themeChip) {
+      // 注意：只能匹配 .settings-pop 内的 [data-theme]，不要匹配 html 上的 data-theme（closest 会向上爬）
+      var themeChip = t.closest ? t.closest('.settings-pop [data-theme]') : null;
+      if (themeChip && themeChip.dataset.theme) {
         state.settings.theme = themeChip.dataset.theme;
         saveSettings();
         applySettings(); // 只刷 CSS 变量，不重建 reader（settings-pop 挂 body，不闪不掉）
