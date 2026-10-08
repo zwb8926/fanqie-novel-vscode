@@ -148,6 +148,11 @@ body {
 .empty { text-align: center; color: var(--fg2); padding: 40px 0; }
 .err-box { text-align: center; color: var(--accent); padding: 24px 12px; font-size: 13px; line-height: 1.7; }
 .rank-tabs { display: flex; gap: 6px; margin-bottom: 10px; flex-wrap: wrap; }
+/* 书城 tab（排行榜/分类/最近更新）与分类浏览 */
+.store-tabs { margin-bottom: 12px; }
+.store-tabs .chip { font-size: 13px; padding: 5px 14px; }
+.cat-chips { max-height: 136px; overflow-y: auto; }
+.recent-list { display: flex; flex-direction: column; gap: 8px; }
 
 /* ============ 搜索 ============ */
 .search-bar { display: flex; gap: 8px; margin-bottom: 12px; }

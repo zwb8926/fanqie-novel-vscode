@@ -119,6 +119,19 @@ async function handleMessage(webview: vscode.Webview, msg: any): Promise<void> {
       post(true, list);
       break;
     }
+    case 'category-tree': {
+      post(true, await api.getCategoryTree());
+      break;
+    }
+    case 'category-books': {
+      post(true, await api.getCategoryBooks(String(msg.categoryId ?? '')));
+      break;
+    }
+    case 'recent-updates': {
+      const r = await api.getRecentUpdates(Number(msg.offset ?? 0), Math.min(Number(msg.limit ?? 20) || 20, 50));
+      post(true, r);
+      break;
+    }
 
     /* ------------------------------ 搜索 ------------------------------ */
     case 'search': {

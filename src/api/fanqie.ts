@@ -809,6 +809,88 @@ export async function getEditorList(): Promise<any[]> {
   return j.data?.list ?? [];
 }
 
+/* -------------------------------- 分类浏览 -------------------------------- */
+
+export interface CategoryNode {
+  id: string;
+  name: string;
+  cover: string;
+}
+
+export interface CategoryTree {
+  boy: CategoryNode[];
+  girl: CategoryNode[];
+  publish: CategoryNode[];
+}
+
+/**
+ * 分类树（App 网关，明文）：男生 41 个 / 女生 38 个 / 出版 8 个。
+ * 走网关而不是网页端 /api/author/book/category_list/v0/ 的原因：网页端那套的书名/摘要是
+ * PUA 字体混淆的，而现有 fontmap 覆盖不到书库类接口的字形。
+ */
+export async function getCategoryTree(): Promise<CategoryTree> {
+  const d = await ssdkJson<any>(C.SSDK_CATEGORY_TREE, {}, '获取分类');
+  const map = (arr: any): CategoryNode[] =>
+    (Array.isArray(arr) ? arr : [])
+      .map((c: any) => ({
+        id: String(c.category_id ?? ''),
+        name: dec(c.category_name ?? ''),
+        cover: Array.isArray(c.thumb_url_list) && c.thumb_url_list.length ? String(c.thumb_url_list[0]) : '',
+      }))
+      .filter((c: CategoryNode) => c.id && c.name);
+  return {
+    boy: map(d.boy_category),
+    girl: map(d.girl_category),
+    publish: map(d.publish_category),
+  };
+}
+
+/** 某个分类下的书（App 网关，明文；接口固定返回 10 条，不支持翻页） */
+export async function getCategoryBooks(categoryId: string): Promise<{ books: SearchBook[]; desc: string }> {
+  const d = await ssdkJson<any>(C.SSDK_CATEGORY_BOOKS, { category_id: categoryId }, '获取分类书单');
+  const list: any[] = Array.isArray(d.data) ? d.data : [];
+  return { books: list.map(normalizeSearchBook), desc: dec(d.category_desc ?? '') };
+}
+
+/* -------------------------------- 最近更新 -------------------------------- */
+
+export interface RecentUpdate {
+  bookId: string;
+  bookName: string;
+  author: string;
+  /** 最新章节的 itemId（可直接续读） */
+  itemId: string;
+  chapterTitle: string;
+  category: string;
+  /** 毫秒时间戳 */
+  updateTime: number;
+  needPay: number;
+}
+
+/** 最近更新（网页端接口，明文）：做「追更」用，total 约 100，可 limit/offset 翻页 */
+export async function getRecentUpdates(
+  offset = 0,
+  limit = 20
+): Promise<{ list: RecentUpdate[]; total: number }> {
+  const q = new URLSearchParams({ limit: String(limit), offset: String(offset) });
+  const j = await requestJson<any>(`${C.HOST}${C.RANK_RECENT_UPDATE}?${q.toString()}`, { headers: webHeaders() });
+  checkBiz(j, '获取最近更新');
+  const list: any[] = j.data?.data ?? [];
+  return {
+    list: list.map((b: any) => ({
+      bookId: String(b.bookId ?? b.book_id ?? ''),
+      bookName: dec(b.bookName ?? b.book_name ?? ''),
+      author: dec(b.author ?? ''),
+      itemId: String(b.itemId ?? b.item_id ?? ''),
+      chapterTitle: dec(b.title ?? ''),
+      category: dec(b.category ?? ''),
+      updateTime: Number(b.updateTime ?? b.update_time ?? 0) * 1000,
+      needPay: Number(b.needPay ?? 0),
+    })),
+    total: Number(j.data?.total ?? list.length),
+  };
+}
+
 /* ---------------------------------- 用户 ---------------------------------- */
 
 export async function getUserInfo(): Promise<UserInfo | null> {
