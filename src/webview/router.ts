@@ -4,7 +4,6 @@
  */
 import * as vscode from 'vscode';
 import * as api from '../api/fanqie';
-import { BookComment } from '../api/fanqie';
 import { logout, QrStatus, startQrLogin, pollQrLogin, finalizeLogin, QrTicket } from '../auth/qr';
 import {
   getLocalShelf,
@@ -120,6 +119,19 @@ async function handleMessage(webview: vscode.Webview, msg: any): Promise<void> {
       post(true, list);
       break;
     }
+    case 'category-tree': {
+      post(true, await api.getCategoryTree());
+      break;
+    }
+    case 'category-books': {
+      post(true, await api.getCategoryBooks(String(msg.categoryId ?? '')));
+      break;
+    }
+    case 'recent-updates': {
+      const r = await api.getRecentUpdates(Number(msg.offset ?? 0), Math.min(Number(msg.limit ?? 20) || 20, 50));
+      post(true, r);
+      break;
+    }
 
     /* ------------------------------ 搜索 ------------------------------ */
     case 'search': {
@@ -211,7 +223,8 @@ async function handleMessage(webview: vscode.Webview, msg: any): Promise<void> {
           const detail = await api.getBookDetail(bookId);
           title = detail.book_name;
           author = detail.author;
-          coverUrl = detail.thumb_url;
+          // 详情接口的 thumb_url 是带 x-expires 的签名地址，存书架要用非签名的那个
+          coverUrl = detail.thumb_source_url || detail.thumb_url;
         } catch {
           /* 保持空，前端显示渐变占位 */
         }
@@ -256,20 +269,12 @@ async function handleMessage(webview: vscode.Webview, msg: any): Promise<void> {
 
     /* ------------------------------ 评论 ------------------------------ */
     case 'book-comments': {
-      // 书籍书评：从 SEO 页面收集评论链接，再逐个拉取（登录不需要）
+      // 书评：App 网关分页接口（可翻页 + 明文），失败自动降级 SEO 页面
       const bookId = String(msg.bookId ?? '');
-      const links = await api.collectBookCommentLinks(bookId);
-      const limit = Math.min(Number(msg.limit ?? 10), 20);
-      const comments: BookComment[] = [];
-      for (const link of links.slice(0, limit)) {
-        try {
-          const c = await api.getBookComment(link.bookId, link.commentId);
-          if (c && c.text) comments.push(c);
-        } catch {
-          /* skip */
-        }
-      }
-      post(true, { comments });
+      const page = Math.max(1, Number(msg.page ?? 1) || 1);
+      const limit = Math.min(Math.max(Number(msg.limit ?? 20) || 20, 1), 50);
+      const r = await api.getBookCommentsWithFallback(bookId, page, limit);
+      post(true, r);
       break;
     }
 

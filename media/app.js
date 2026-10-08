@@ -48,6 +48,23 @@
     rankOffset: 0,
     rankLoading: false,
     rankHasMore: false,
+    // 书城 tab：排行榜 / 分类 / 最近更新
+    storeTab: 'rank',
+    catTree: { boy: [], girl: [], publish: [] },
+    catTreeLoaded: false,
+    catTreeLoading: false,
+    catGender: 'boy',
+    catActive: '',
+    catBooks: [],
+    catBooksDesc: '',
+    catBooksLoading: false,
+    catBooksError: null,
+    updateItems: [],
+    updateOffset: 0,
+    updateHasMore: false,
+    updateLoaded: false,
+    updateLoading: false,
+    updateError: null,
     // 搜索
     query: '',
     searchPage: 0,
@@ -74,6 +91,11 @@
     comments: [],
     commentsLoading: false,
     commentsError: null,
+    commentsPage: 1,
+    commentsHasMore: false,
+    commentsTotal: 0,
+    commentsScore: '',
+    commentsLoadingMore: false,
     settingsOpen: false,
     // 书架
     shelfLocal: [],
@@ -216,6 +238,192 @@
 
   /* ---------------- 书城 ---------------- */
   function renderBookstore(view) {
+    view.appendChild(storeTabs());
+    if (state.storeTab === 'category') { renderCategorySection(view); return; }
+    if (state.storeTab === 'update') { renderRecentSection(view); return; }
+    renderRankSection(view);
+  }
+
+  function storeTabs() {
+    var tabs = [{ v: 'rank', l: '排行榜' }, { v: 'category', l: '分类' }, { v: 'update', l: '最近更新' }];
+    var row = el('div', 'chips store-tabs');
+    tabs.forEach(function (t) {
+      var b = el('button', 'chip' + (state.storeTab === t.v ? ' active' : ''), t.l);
+      b.dataset.storeTab = t.v;
+      row.appendChild(b);
+    });
+    return row;
+  }
+
+  /* ---------------- 书城：分类浏览 ---------------- */
+  function renderCategorySection(view) {
+    if (!state.catTreeLoaded) {
+      view.appendChild(el('div', 'loading', '加载分类…'));
+      if (!state.catTreeLoading) loadCategoryTree();
+      return;
+    }
+    var genders = [{ v: 'boy', l: '男生' }, { v: 'girl', l: '女生' }, { v: 'publish', l: '出版' }];
+    var row = el('div', 'chips');
+    genders.forEach(function (g) {
+      var b = el('button', 'chip' + (state.catGender === g.v ? ' active' : ''), g.l);
+      b.dataset.catGender = g.v;
+      row.appendChild(b);
+    });
+    view.appendChild(row);
+
+    var cats = state.catTree[state.catGender] || [];
+    var catRow = el('div', 'chips cat-chips');
+    cats.forEach(function (c) {
+      var b = el('button', 'chip' + (state.catActive === c.id ? ' active' : ''), c.name);
+      b.dataset.catId = c.id;
+      catRow.appendChild(b);
+    });
+    view.appendChild(catRow);
+
+    if (!state.catActive) {
+      view.appendChild(el('div', 'empty', '选择一个分类，看看有什么好书'));
+      return;
+    }
+    view.appendChild(el('div', 'section-title', state.catBooksDesc || '分类书单'));
+    var grid = el('div', 'book-grid');
+    grid.id = 'catGrid';
+    view.appendChild(grid);
+    if (state.catBooksLoading) {
+      grid.appendChild(el('div', 'loading', '加载中…'));
+    } else if (state.catBooksError) {
+      grid.appendChild(errBox(state.catBooksError));
+    } else {
+      renderBookCards(grid, state.catBooks);
+    }
+  }
+
+  // 通用书卡网格（分类书单等 SearchBook 形状的数据源）
+  function renderBookCards(grid, books) {
+    grid.innerHTML = '';
+    if (!books.length) {
+      grid.appendChild(el('div', 'empty', '暂无书籍'));
+      return;
+    }
+    books.forEach(function (b) {
+      var card = el('div', 'book-card');
+      card.dataset.bookId = b.id;
+      var img = el('img', 'cover');
+      img.loading = 'lazy';
+      if (b.cover) { img.src = b.cover; img.onerror = coverFallback; }
+      else img.style.background = 'linear-gradient(135deg,#ff6b3d,#ff3d2e)';
+      var info = el('div', 'info');
+      info.appendChild(el('div', 'title', b.name || '未知书名'));
+      info.appendChild(el('div', 'meta', b.meta || ''));
+      card.appendChild(img);
+      card.appendChild(info);
+      grid.appendChild(card);
+    });
+  }
+
+  function loadCategoryTree() {
+    state.catTreeLoading = true;
+    call('category-tree', {}).then(function (t) {
+      state.catTree = t || { boy: [], girl: [], publish: [] };
+      state.catTreeLoaded = true;
+      state.catTreeLoading = false;
+      renderView();
+    }).catch(function (e) {
+      state.catTreeLoading = false;
+      var view = $('#view');
+      if (view) { view.innerHTML = ''; view.appendChild(errBox(e.message)); }
+    });
+  }
+
+  function loadCategoryBooks(catId) {
+    state.catActive = catId;
+    state.catBooks = [];
+    state.catBooksDesc = '';
+    state.catBooksError = null;
+    state.catBooksLoading = true;
+    renderView();
+    call('category-books', { categoryId: catId }).then(function (r) {
+      state.catBooks = ((r && r.books) || []).map(function (b) {
+        var meta = [b.author, b.score ? '评分 ' + b.score : '', b.word_number ? fmtWord(b.word_number) : '']
+          .filter(Boolean).join(' · ');
+        return { id: b.book_id, name: b.book_name, cover: b.thumb_url, meta: meta };
+      });
+      state.catBooksDesc = (r && r.desc) || '';
+      state.catBooksLoading = false;
+      renderView();
+    }).catch(function (e) {
+      state.catBooksLoading = false;
+      state.catBooksError = e.message;
+      renderView();
+    });
+  }
+
+  /* ---------------- 书城：最近更新 ---------------- */
+  function renderRecentSection(view) {
+    if (!state.updateLoaded && !state.updateLoading) {
+      loadRecentUpdates(true);
+      return;
+    }
+    var list = el('div', 'recent-list');
+    view.appendChild(list);
+    if (state.updateLoading) {
+      list.appendChild(el('div', 'loading', '加载中…'));
+      return;
+    }
+    if (state.updateError) {
+      list.appendChild(errBox(state.updateError));
+      return;
+    }
+    if (!state.updateItems.length) {
+      list.appendChild(el('div', 'empty', '暂无更新'));
+      return;
+    }
+    state.updateItems.forEach(function (u) {
+      // 复用历史记录的条目样式，但点击进书籍详情
+      var item = el('div', 'history-item recent-item');
+      item.dataset.bookId = u.bookId;
+      item.dataset.itemId = u.itemId;
+      var info = el('div', 'hi-info');
+      info.appendChild(el('div', 'title', u.bookName || '未知书名'));
+      info.appendChild(el('div', 'chap', u.chapterTitle || ''));
+      info.appendChild(el('div', 'meta', (u.author || '') + (u.category ? ' · ' + u.category : '')));
+      item.appendChild(info);
+      item.appendChild(el('div', 'time', fmtTime(u.updateTime)));
+      list.appendChild(item);
+    });
+    if (state.updateHasMore) {
+      var more = el('button', 'btn secondary load-more', '加载更多');
+      more.id = 'updateMore';
+      view.appendChild(more);
+    }
+  }
+
+  function loadRecentUpdates(reset) {
+    if (reset) { state.updateItems = []; state.updateOffset = 0; }
+    state.updateLoading = true;
+    state.updateError = null;
+    renderView();
+    call('recent-updates', { offset: state.updateOffset, limit: 20 }).then(function (r) {
+      var list = (r && r.list) || [];
+      if (reset) {
+        state.updateItems = list;
+      } else {
+        var seen = Object.create(null);
+        state.updateItems.forEach(function (u) { seen[u.bookId] = 1; });
+        list.forEach(function (u) { if (!seen[u.bookId]) { seen[u.bookId] = 1; state.updateItems.push(u); } });
+      }
+      state.updateOffset = state.updateItems.length;
+      state.updateHasMore = list.length >= 20;
+      state.updateLoaded = true;
+      state.updateLoading = false;
+      renderView();
+    }).catch(function (e) {
+      state.updateLoading = false;
+      state.updateError = e.message;
+      renderView();
+    });
+  }
+
+  function renderRankSection(view) {
     if (!state.rankCatsLoaded) {
       view.appendChild(el('div', 'loading', '加载中…'));
       call('rank-categories', {}).then(function (cats) {
@@ -297,6 +505,19 @@
       card.appendChild(info);
       grid.appendChild(card);
     });
+  }
+
+  // 进入书城时按当前 tab 触发对应数据加载
+  function ensureStoreData() {
+    if (state.storeTab === 'category') {
+      if (!state.catTreeLoaded && !state.catTreeLoading) loadCategoryTree();
+      return;
+    }
+    if (state.storeTab === 'update') {
+      if (!state.updateLoaded && !state.updateLoading) loadRecentUpdates(true);
+      return;
+    }
+    if (!state.rankBooks.length && !state.rankLoading) loadRank(true);
   }
 
   function loadRank(reset) {
@@ -391,8 +612,16 @@
     state.searching = true;
     renderView();
     call('search', { query: state.query, page: state.searchPage, pageSize: 10 }).then(function (r) {
-      state.searchBooks = reset ? r.books : state.searchBooks.concat(r.books);
-      state.searchTotal = r.total;
+      var books = (r && r.books) || [];
+      if (reset) {
+        state.searchBooks = books;
+      } else {
+        // 兜底数据源（App 网关）相邻两页会有 1 条重叠，按 bookId 去重后再追加
+        var seen = Object.create(null);
+        state.searchBooks.forEach(function (b) { seen[b.book_id] = 1; });
+        books.forEach(function (b) { if (!seen[b.book_id]) { seen[b.book_id] = 1; state.searchBooks.push(b); } });
+      }
+      state.searchTotal = (r && r.total) || state.searchBooks.length;
       state.searchPage = reset ? 1 : state.searchPage + 1;
       state.searching = false;
       renderView();
@@ -1257,29 +1486,69 @@
   /* ---------------- 书评 ---------------- */
   // 缓存已加载过的评论（按 bookId 索引），避免重复打开时重新拉取
   var _commentsCache = Object.create(null);
-  function loadBookComments(force) {
+
+  // 把缓存里的书评状态套回 state（含分页/总数/评分）
+  function applyCommentsCache(c) {
+    state.comments = c.comments || [];
+    state.commentsPage = c.page || 1;
+    state.commentsHasMore = !!c.hasMore;
+    state.commentsTotal = c.total || 0;
+    state.commentsScore = c.score || '';
+    state.commentsLoading = false;
+    state.commentsError = c.error || null;
+  }
+
+  function commentsCacheSnapshot(error) {
+    return {
+      loading: false,
+      comments: state.comments,
+      page: state.commentsPage,
+      hasMore: state.commentsHasMore,
+      total: state.commentsTotal,
+      score: state.commentsScore,
+      error: error || null,
+    };
+  }
+
+  // more=false：加载第 1 页（命中缓存直接渲染）；more=true：加载下一页追加
+  function loadBookComments(more) {
     var bookId = state.readerBookId;
-    if (!force && _commentsCache[bookId] && !_commentsCache[bookId].loading) {
-      state.comments = _commentsCache[bookId].comments || [];
-      state.commentsLoading = false;
-      state.commentsError = _commentsCache[bookId].error || null;
+    var cached = _commentsCache[bookId];
+    if (!more && cached && !cached.loading) {
+      applyCommentsCache(cached);
       renderCommentsDrawer();
       return;
     }
-    _commentsCache[bookId] = { loading: true, comments: [], error: null };
-    state.commentsLoading = true;
+    var page = more ? (state.commentsPage || 1) + 1 : 1;
+    if (more) {
+      state.commentsLoadingMore = true;
+    } else {
+      state.commentsLoading = true;
+      state.comments = [];
+      state.commentsPage = 1;
+      state.commentsHasMore = false;
+      state.commentsTotal = 0;
+      state.commentsScore = '';
+      _commentsCache[bookId] = { loading: true, comments: [], error: null };
+    }
     state.commentsError = null;
     renderCommentsDrawer();
-    var p = call('book-comments', { bookId: bookId, limit: 12 });
-    p.then(function (r) {
-      state.comments = (r && r.comments) || [];
+    call('book-comments', { bookId: bookId, page: page, limit: 20 }).then(function (r) {
+      var list = (r && r.comments) || [];
+      state.comments = more ? state.comments.concat(list) : list;
+      state.commentsPage = (r && r.page) || page;
+      state.commentsHasMore = !!(r && r.hasMore);
+      state.commentsTotal = (r && r.total) || state.comments.length;
+      state.commentsScore = (r && r.averageScore) || state.commentsScore || '';
       state.commentsLoading = false;
-      _commentsCache[bookId] = { loading: false, comments: state.comments, error: null };
+      state.commentsLoadingMore = false;
+      _commentsCache[bookId] = commentsCacheSnapshot(null);
       renderCommentsDrawer();
     }).catch(function (e) {
       state.commentsLoading = false;
+      state.commentsLoadingMore = false;
       state.commentsError = e.message;
-      _commentsCache[bookId] = { loading: false, comments: state.comments, error: e.message };
+      _commentsCache[bookId] = commentsCacheSnapshot(e.message);
       renderCommentsDrawer();
     });
   }
@@ -1290,7 +1559,10 @@
     var drawer = el('div', 'drawer comment-drawer');
     drawer.id = 'commentsDrawer';
     var head = el('div', 'drawer-head');
-    head.appendChild(el('span', null, '书评'));
+    var headLeft = el('div', 'drawer-title');
+    headLeft.appendChild(el('span', null, state.commentsTotal ? '书评 ' + fmtCount(state.commentsTotal) : '书评'));
+    if (state.commentsScore) headLeft.appendChild(el('span', 'c-score', '★ ' + state.commentsScore));
+    head.appendChild(headLeft);
     var close = el('button', null, '✕');
     close.id = 'closeDrawer';
     head.appendChild(close);
@@ -1325,6 +1597,12 @@
         if (stat.length) item.appendChild(el('div', 'c-stat', stat.join(' · ')));
         body.appendChild(item);
       });
+      if (state.commentsHasMore) {
+        var moreBtn = el('button', 'btn ghost load-more', state.commentsLoadingMore ? '加载中…' : '加载更多');
+        moreBtn.id = 'commentsMore';
+        if (state.commentsLoadingMore) moreBtn.disabled = true;
+        body.appendChild(moreBtn);
+      }
     }
     drawer.appendChild(body);
     document.body.appendChild(drawer);
@@ -1412,7 +1690,7 @@
       // 用 render() 全量重建（含 navbar），保证选中状态同步切换
       render();
       if (target === 'shelf') renderShelf($('#view'));
-      if (target === 'bookstore' && !state.rankBooks.length && !state.rankLoading) loadRank(true);
+      if (target === 'bookstore') ensureStoreData();
       return;
     }
     var gender = t.closest ? t.closest('[data-gender]') : null;
@@ -1422,7 +1700,9 @@
       loadRank(true);
       return;
     }
-    var rankType = t.closest ? t.closest('[data-rankType]') : null;
+    // 榜单类型 chips：注意 dataset.rankType 生成的属性名是 data-rank-type（kebab），
+    // 选择器必须写 kebab 形式，写成 [data-rankType] 匹配不上（曾导致点榜单类型无反应）
+    var rankType = t.closest ? t.closest('[data-rank-type]') : null;
     if (rankType) {
       state.rankType = Number(rankType.dataset.rankType);
       loadRank(true);
@@ -1438,6 +1718,34 @@
     if (more) { loadRank(false); return; }
     var searchMore = t.closest ? t.closest('#searchMore') : null;
     if (searchMore) { doSearch(false); return; }
+    var commentsMore = t.closest ? t.closest('#commentsMore') : null;
+    if (commentsMore) { loadBookComments(true); return; }
+    // 书城 tab / 分类 / 最近更新（data-* 一律用 kebab 形式匹配 dataset 生成的属性名）
+    var storeTab = t.closest ? t.closest('[data-store-tab]') : null;
+    if (storeTab) {
+      state.storeTab = storeTab.dataset.storeTab;
+      renderView();
+      return;
+    }
+    var catGender = t.closest ? t.closest('[data-cat-gender]') : null;
+    if (catGender) {
+      state.catGender = catGender.dataset.catGender;
+      state.catActive = '';
+      state.catBooks = [];
+      state.catBooksDesc = '';
+      state.catBooksError = null;
+      renderView();
+      return;
+    }
+    var catChip = t.closest ? t.closest('[data-cat-id]') : null;
+    if (catChip) { loadCategoryBooks(catChip.dataset.catId); return; }
+    var updateMore = t.closest ? t.closest('#updateMore') : null;
+    if (updateMore) { loadRecentUpdates(false); return; }
+    var recentItem = t.closest ? t.closest('.recent-item') : null;
+    if (recentItem) {
+      if (IS_SIDEBAR) { openBookInEditor(recentItem.dataset.bookId); } else { showBookModal(recentItem.dataset.bookId); }
+      return;
+    }
     var card = t.closest ? t.closest('.book-card') : null;
     if (card) {
       if (IS_SIDEBAR) { openBookInEditor(card.dataset.bookId); } else { showBookModal(card.dataset.bookId); }
@@ -1541,8 +1849,9 @@
     // 阅读器
     if (state.view === 'reader') {
       // 主题切换 chips 优先处理（必须在 settingsPop 早返回之前，否则被拦截）
-      var themeChip = t.closest ? t.closest('[data-theme]') : null;
-      if (themeChip) {
+      // 注意：只能匹配 .settings-pop 内的 [data-theme]，不要匹配 html 上的 data-theme（closest 会向上爬）
+      var themeChip = t.closest ? t.closest('.settings-pop [data-theme]') : null;
+      if (themeChip && themeChip.dataset.theme) {
         state.settings.theme = themeChip.dataset.theme;
         saveSettings();
         applySettings(); // 只刷 CSS 变量，不重建 reader（settings-pop 挂 body，不闪不掉）
@@ -1580,7 +1889,7 @@
         state.inReader = false;
         state.view = 'bookstore';
         render();
-        if (!state.rankBooks.length && !state.rankLoading) loadRank(true);
+        ensureStoreData();
         return;
       }
       if (t.id === 'catalogBtn') {
@@ -1604,13 +1913,15 @@
           // 直接从缓存渲染（不重置已有评论）
           var cached = _commentsCache[state.readerBookId];
           if (cached && !cached.loading) {
-            state.comments = cached.comments || [];
-            state.commentsLoading = false;
-            state.commentsError = cached.error || null;
+            applyCommentsCache(cached);
           } else {
             state.comments = [];
             state.commentsLoading = true;
             state.commentsError = null;
+            state.commentsPage = 1;
+            state.commentsHasMore = false;
+            state.commentsTotal = 0;
+            state.commentsScore = '';
           }
           renderCommentsDrawer();
           loadBookComments(false);
@@ -1780,14 +2091,14 @@
       if (m.settings) state.settings = Object.assign(state.settings, m.settings);
       state.view = state.view || 'bookstore';
       render();
-      if (state.view === 'bookstore' && !state.rankBooks.length && !state.rankLoading) loadRank(true);
+      if (state.view === 'bookstore') ensureStoreData();
       return;
     }
     if (m.type === 'nav') {
       state.view = m.view;
       state.inReader = false;
       render();
-      if (m.view === 'bookstore' && !state.rankBooks.length && !state.rankLoading) loadRank(true);
+      if (m.view === 'bookstore') ensureStoreData();
       if (m.view === 'shelf') renderShelf($('#view'));
       return;
     }
@@ -1894,7 +2205,7 @@
     state.user = r.user;
     state.loggedIn = !!r.loggedIn;
     render();
-    if (state.view === 'bookstore' && !state.rankBooks.length && !state.rankLoading) loadRank(true);
+    ensureStoreData();
   }).catch(function () { /* ignore */ });
   call('settings-get', {}).then(function (s) {
     if (s) { state.settings = Object.assign(state.settings, s); applySettings(); }
