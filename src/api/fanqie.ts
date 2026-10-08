@@ -92,6 +92,19 @@ export interface BookInfo {
   category: string;
   score: string;
   read_count: number;
+  /** 数据来源：app=App 网关详情接口，web=旧网页详情接口，ssr=SEO 页面降级 */
+  source?: 'app' | 'web' | 'ssr';
+  /** 非签名封面地址（可长期缓存/存书架；接口给的 thumb_url 是带过期时间的签名地址） */
+  thumb_source_url?: string;
+  /* 以下为 App 详情接口（/api/book/info）独有的增强字段 */
+  author_id?: string;
+  author_avatar?: string;
+  author_desc?: string;
+  /** 完整分类路径，如「女生/古代言情/宫闱宅斗」 */
+  complete_category?: string;
+  last_publish_time?: number;
+  /** 0 未关注 / 1 已关注 */
+  follow_status?: number;
 }
 
 export interface RankCategory {
@@ -155,6 +168,30 @@ export interface BookComment {
   book_title?: string;
 }
 
+/** 一页书评（App 网关可翻页；SSR 降级只有首页） */
+export interface BookCommentPage {
+  comments: BookComment[];
+  /** 该书评论文总数 */
+  total: number;
+  hasMore: boolean;
+  /** 当前页码，从 1 开始 */
+  page: number;
+  /** 评分均值（来自评分接口，失败时为空） */
+  averageScore?: string;
+  scoreCount?: number;
+  source: 'ssdk' | 'ssr';
+}
+
+/** 书籍评分概览 */
+export interface BookScore {
+  /** 平均分，如 "8.5"；无评分时为空串 */
+  average_score: string;
+  score_count: number;
+  /** 各星级人数分布 */
+  rank: number[];
+  my_score: number;
+}
+
 /* ------------------------------ 通用请求助手 ------------------------------ */
 
 function webHeaders(extra: Record<string, string> = {}): Record<string, string> {
@@ -184,9 +221,52 @@ function checkBiz(j: any, what: string): void {
   }
 }
 
+/**
+ * App/H5 网关（novel.snssdk.com）请求助手。
+ * 该网关的坑：公共参数（aid/app_name/...）缺失时**不报错码**，而是返回
+ * `{"code":0,"data":null,"message":"invalid client"}`，所以这里额外校验 data 是否存在。
+ */
+async function ssdkJson<T = any>(path: string, params: Record<string, string>, what: string): Promise<T> {
+  const q = new URLSearchParams(C.ssdkQuery(params));
+  const j = await requestJson<any>(`${C.SSDK_HOST}${path}?${q.toString()}`, {
+    headers: {
+      Referer: C.SSDK_REFERER,
+      Accept: 'application/json, text/plain, */*',
+    },
+    timeoutMs: 20000,
+  });
+  if (!j || typeof j !== 'object') throw new ApiError(`${what}：响应异常`);
+  if (j.code !== undefined && j.code !== 0) throw new ApiError(`${what}失败：${j.message || `code=${j.code}`}`, j.code);
+  if (j.data === null || j.data === undefined) throw new ApiError(`${what}失败：${j.message || '空数据'}`, j.code ?? -1);
+  return j.data as T;
+}
+
 /* ---------------------------------- 搜索 ---------------------------------- */
 
-export async function searchBooks(query: string, page = 0, pageSize = 10): Promise<{ books: SearchBook[]; total: number }> {
+/** 归一化书籍对象：网页端（book_name/thumb_url）与 App 网关（title）字段名不同，统一在这里兼容 */
+function normalizeSearchBook(b: any): SearchBook {
+  return {
+    book_id: String(b.book_id ?? ''),
+    book_name: dec(b.book_name ?? b.title ?? b.original_book_name ?? ''),
+    author: dec(b.author ?? ''),
+    abstract: dec(b.abstract ?? ''),
+    thumb_url: b.thumb_url ?? b.audio_thumb_url_hd ?? b.audio_thumb_uri ?? b.thumb_url_hd ?? '',
+    category: dec(b.category ?? ''),
+    word_number: Number(b.word_number ?? 0),
+    serial_count: Number(b.serial_count ?? 0),
+    creation_status: String(b.creation_status ?? ''),
+    last_chapter_title: dec(b.last_chapter_title ?? ''),
+    last_publish_time: Number(b.last_publish_time ?? 0) * 1000,
+    score: Number(b.score ?? 0) > 0 ? String(b.score) : '',
+  };
+}
+
+/** 网页端搜索接口（机房 IP 下会被风控返回空响应，所以外面还有 App 网关兜底） */
+async function searchBooksWeb(
+  query: string,
+  page: number,
+  pageSize: number
+): Promise<{ books: SearchBook[]; total: number }> {
   const q = new URLSearchParams({
     query_word: query,
     page_index: String(page),
@@ -201,69 +281,207 @@ export async function searchBooks(query: string, page = 0, pageSize = 10): Promi
   });
   checkBiz(j, '搜索');
   const list: any[] = j.data?.search_book_data_list ?? [];
-  const books = list.map((b: any) => ({
-    book_id: String(b.book_id ?? ''),
-    book_name: dec(b.book_name ?? b.original_book_name ?? ''),
-    author: dec(b.author ?? ''),
-    abstract: dec(b.abstract ?? ''),
-    thumb_url: b.thumb_url ?? b.audio_thumb_url_hd ?? '',
-    category: dec(b.category ?? ''),
-    word_number: Number(b.word_number ?? 0),
-    serial_count: Number(b.serial_count ?? 0),
-    creation_status: String(b.creation_status ?? ''),
-    last_chapter_title: dec(b.last_chapter_title ?? ''),
-    last_publish_time: Number(b.last_publish_time ?? 0) * 1000,
-    score: Number(b.score ?? 0) > 0 ? String(b.score) : '',
-  }));
+  const books = list.map(normalizeSearchBook);
   return { books, total: Number(j.data?.total_count ?? books.length) };
+}
+
+/**
+ * App/H5 网关搜索（参数名是 q，翻页用 offset）。
+ * 注意两点（实测）：
+ *  - count 被忽略，固定每页 10 条 → offset 按 SSDK_SEARCH_PAGE_SIZE 步进；
+ *  - 相邻两页有 1 条重叠 → 调用方按 book_id 去重。
+ */
+async function searchBooksSsdk(
+  query: string,
+  page: number,
+  pageSize: number
+): Promise<{ books: SearchBook[]; total: number }> {
+  const size = C.SSDK_SEARCH_PAGE_SIZE;
+  const offset = Math.max(page, 0) * size;
+  const d = await ssdkJson<any>(
+    C.SSDK_SEARCH,
+    { q: query, count: String(pageSize), offset: String(offset) },
+    '搜索'
+  );
+  const list: any[] = Array.isArray(d.ret_data) ? d.ret_data : [];
+  const books = list.map(normalizeSearchBook);
+  const nextOffset = Number(d.offset ?? offset + size);
+  const hasMore = Boolean(d.has_more);
+  // 前端用「已加载条数 < total」决定要不要显示「加载更多」，
+  // 所以有下一页时 total 要给的比已加载量大（取下一页起点 + 一页）
+  const total = hasMore ? nextOffset + size : Math.max(nextOffset, books.length);
+  return { books, total };
+}
+
+export async function searchBooks(
+  query: string,
+  page = 0,
+  pageSize = 10
+): Promise<{ books: SearchBook[]; total: number }> {
+  const q = String(query ?? '').trim();
+  if (!q) return { books: [], total: 0 };
+
+  let webError: unknown = null;
+  try {
+    const r = await searchBooksWeb(q, page, pageSize);
+    // 首页有结果就直接用；首页为空（可能是风控，也可能是真没结果）再走兜底
+    if (r.books.length || page > 0) return r;
+  } catch (e) {
+    webError = e;
+  }
+
+  try {
+    return await searchBooksSsdk(q, page, pageSize);
+  } catch (e) {
+    if (webError) throw webError;
+    throw e;
+  }
 }
 
 /* -------------------------------- 书籍详情 -------------------------------- */
 
-export async function getBookDetail(bookId: string): Promise<BookInfo> {
+/**
+ * 书籍详情（App 网关同源接口 /api/book/info）。
+ * 相比旧的 /api/reader/full/book/detail：字段更全（作者 id/头像/简介、完整分类路径、
+ * 更新时间、关注状态），且实测在机房 IP 下依然可用（旧接口会被风控返回空响应）。
+ */
+export async function getBookInfo(bookId: string): Promise<BookInfo> {
+  const j = await requestJson<any>(`${C.HOST}${C.BOOK_INFO}?bookId=${encodeURIComponent(bookId)}`, {
+    headers: webHeaders(),
+  });
+  checkBiz(j, '获取书籍详情');
+  const d = j.data;
+  if (!d) throw new ApiError('书籍详情为空');
+  return {
+    book_id: String(d.bookId ?? bookId),
+    book_name: dec(d.bookName ?? d.book_name ?? ''),
+    author: dec(d.author ?? d.authorName ?? ''),
+    abstract: dec(d.abstract ?? ''),
+    thumb_url: d.thumbUrl ?? d.thumbUri ?? '',
+    creation_status: String(d.creationStatus ?? ''),
+    word_number: Number(d.wordNumber ?? 0),
+    serial_count: Number(d.serialCount ?? d.chapterCount ?? 0),
+    last_chapter_item_id: String(d.lastChapterItemId ?? ''),
+    last_chapter_title: dec(d.lastChapterTitle ?? ''),
+    category: dec(d.category ?? d.completeCategory ?? ''),
+    score: '',
+    read_count: Number(d.readCount ?? 0),
+    source: 'app',
+    author_id: String(d.authorId ?? ''),
+    author_avatar: d.avatarUri ?? '',
+    author_desc: dec(d.description ?? ''),
+    complete_category: dec(d.completeCategory ?? ''),
+    last_publish_time: Number(d.lastPublishTime ?? 0) * 1000,
+    follow_status: Number(d.followStatus ?? 0),
+    thumb_source_url: C.coverUrlFromPath(d.sourceUri),
+  };
+}
+
+/** 旧网页详情接口（机房 IP 下会被风控，保留作为第二层） */
+async function getBookDetailWeb(bookId: string): Promise<BookInfo> {
+  const j = await requestJson<any>(`${C.HOST}${C.BOOK_DETAIL}?bookId=${encodeURIComponent(bookId)}`, {
+    headers: webHeaders(),
+  });
+  checkBiz(j, '获取书籍详情');
+  const d = j.data;
+  if (!d) throw new ApiError('书籍详情为空');
+  return {
+    book_id: String(d.book_id ?? bookId),
+    book_name: dec(d.book_name ?? ''),
+    author: dec(d.author ?? ''),
+    abstract: dec(d.abstract ?? ''),
+    thumb_url: d.thumb_url ?? d.thumbUri ?? '',
+    creation_status: String(d.creation_status ?? ''),
+    word_number: Number(d.word_number ?? 0),
+    serial_count: Number(d.serial_count ?? d.chapter_count ?? 0),
+    last_chapter_item_id: String(d.last_chapter_item_id ?? ''),
+    last_chapter_title: dec(d.last_chapter_title ?? ''),
+    category: dec(d.category ?? ''),
+    score: String(d.score ?? ''),
+    read_count: Number(d.read_count ?? 0),
+    source: 'web',
+  };
+}
+
+/**
+ * 章节总数：走轻量目录接口（只回 itemId 数组，约 20KB，比目录详情小一个数量级）。
+ * 新的详情接口不带章节总数，用它补。
+ */
+export async function getChapterCount(bookId: string): Promise<number> {
   try {
-    const j = await requestJson<any>(`${C.HOST}${C.BOOK_DETAIL}?bookId=${encodeURIComponent(bookId)}`, {
+    const j = await requestJson<any>(`${C.HOST}${C.DIRECTORY_IID}?bookId=${encodeURIComponent(bookId)}`, {
       headers: webHeaders(),
     });
-    checkBiz(j, '获取书籍详情');
-    const d = j.data;
-    if (!d) throw new ApiError('书籍详情为空');
-    return {
-      book_id: String(d.book_id ?? bookId),
-      book_name: dec(d.book_name ?? ''),
-      author: dec(d.author ?? ''),
-      abstract: dec(d.abstract ?? ''),
-      thumb_url: d.thumb_url ?? d.thumbUri ?? '',
-      creation_status: String(d.creation_status ?? ''),
-      word_number: Number(d.word_number ?? 0),
-      serial_count: Number(d.serial_count ?? d.chapter_count ?? 0),
-      last_chapter_item_id: String(d.last_chapter_item_id ?? ''),
-      last_chapter_title: dec(d.last_chapter_title ?? ''),
-      category: dec(d.category ?? ''),
-      score: String(d.score ?? ''),
-      read_count: Number(d.read_count ?? 0),
-    };
-  } catch (e) {
-    if (e instanceof ApiError) throw e;
-    // 降级：SSR 书籍页
-    const p = await fetchBookPageState(bookId);
-    if (!p) throw new ApiError('获取书籍详情失败（接口与网页均不可用）');
-    return {
-      book_id: String(p.bookId ?? bookId),
-      book_name: dec(p.bookName ?? ''),
-      author: dec(p.author ?? ''),
-      abstract: dec(p.abstract ?? ''),
-      thumb_url: p.thumbUri ?? '',
-      creation_status: String(p.creationStatus ?? ''),
-      word_number: Number(p.wordNumber ?? 0),
-      serial_count: Number(p.chapterTotal ?? 0),
-      last_chapter_item_id: String(p.lastChapterItemId ?? ''),
-      last_chapter_title: dec(p.lastChapterTitle ?? ''),
-      category: dec(p.category ?? ''),
-      score: '',
-      read_count: Number(p.readCount ?? 0),
-    };
+    if (j?.code !== 0 || !Array.isArray(j.data)) return 0;
+    return j.data.length;
+  } catch {
+    return 0;
   }
+}
+
+/** 并行为详情补「评分 + 章节总数」（都是可选增强，任一失败都不影响详情） */
+async function attachExtras(info: BookInfo): Promise<void> {
+  const jobs: Array<Promise<void>> = [];
+  if (!info.score) {
+    jobs.push(
+      getBookScore(info.book_id).then(
+        s => {
+          if (s.average_score) info.score = s.average_score;
+        },
+        () => undefined
+      )
+    );
+  }
+  if (!info.serial_count) {
+    jobs.push(
+      getChapterCount(info.book_id).then(
+        n => {
+          if (n > 0) info.serial_count = n;
+        },
+        () => undefined
+      )
+    );
+  }
+  if (jobs.length) await Promise.all(jobs);
+}
+
+/**
+ * 书籍详情：App 网关详情 → 旧网页详情 → SSR 书籍页，三层依次降级。
+ * 拿到的详情会并行补评分与章节总数（都可选，失败静默）。
+ */
+export async function getBookDetail(bookId: string): Promise<BookInfo> {
+  const failures: string[] = [];
+  for (const attempt of [getBookInfo, getBookDetailWeb]) {
+    try {
+      const info = await attempt(bookId);
+      await attachExtras(info);
+      return info;
+    } catch (e) {
+      failures.push(e instanceof Error ? e.message : String(e));
+    }
+  }
+
+  // 最后一层：SSR 书籍页（无需登录，永不风控）
+  const p = await fetchBookPageState(bookId);
+  if (!p) throw new ApiError(`获取书籍详情失败（${failures.join('；')}）`);
+  const info: BookInfo = {
+    book_id: String(p.bookId ?? bookId),
+    book_name: dec(p.bookName ?? ''),
+    author: dec(p.author ?? ''),
+    abstract: dec(p.abstract ?? ''),
+    thumb_url: p.thumbUri ?? '',
+    creation_status: String(p.creationStatus ?? ''),
+    word_number: Number(p.wordNumber ?? 0),
+    serial_count: Number(p.chapterTotal ?? 0),
+    last_chapter_item_id: String(p.lastChapterItemId ?? ''),
+    last_chapter_title: dec(p.lastChapterTitle ?? ''),
+    category: dec(p.category ?? ''),
+    score: '',
+    read_count: Number(p.readCount ?? 0),
+    source: 'ssr',
+  };
+  await attachExtras(info);
+  return info;
 }
 
 /* ---------------------------------- 目录 ---------------------------------- */
@@ -779,6 +997,109 @@ export async function updateReadProgress(bookId: string, itemId: string, order =
 }
 
 /* ---------------------------------- 书评 ---------------------------------- */
+
+/**
+ * 书评列表（App/H5 网关，**可翻页**）。
+ * 实测参数：book_id + page_number（从 1 开始）+ page_count，返回 total_mark_num/has_more/comment_list。
+ * 注意：item_id 会被忽略（该接口是书籍维度的"全部评价"，不是按段落的段评）。
+ */
+export async function getBookComments(bookId: string, page = 1, pageCount = 20): Promise<BookCommentPage> {
+  const p = Math.max(1, page);
+  const d = await ssdkJson<any>(
+    C.SSDK_BOOK_COMMENTS,
+    { book_id: bookId, page_number: String(p), page_count: String(Math.max(1, pageCount)) },
+    '获取书评'
+  );
+  const list: any[] = Array.isArray(d.comment_list) ? d.comment_list : [];
+  return {
+    comments: list.map(normalizeComment),
+    total: Number(d.total_mark_num ?? list.length),
+    hasMore: Number(d.has_more ?? 0) > 0,
+    page: p,
+    source: 'ssdk',
+  };
+}
+
+function normalizeComment(c: any): BookComment {
+  return {
+    comment_id: String(c.comment_id ?? ''),
+    user_id: String(c.user_id ?? ''),
+    nick_name: dec(c.user_screen_name ?? '') || '匿名',
+    avatar: c.user_avatar ?? '',
+    text: dec(c.content ?? ''),
+    create_time: Number(c.create_time ?? 0) * 1000,
+    digg_count: Number(c.thumbsup_count ?? 0),
+    reply_count: Number(c.reply_count ?? 0),
+    score: Number(c.score ?? 0),
+    book_title: '',
+  };
+}
+
+/** 书籍评分概览（App 网关）：平均分、评分人数、星级分布 */
+export async function getBookScore(bookId: string): Promise<BookScore> {
+  const d = await ssdkJson<any>(C.SSDK_BOOK_SCORE, { book_id: bookId }, '获取评分');
+  return {
+    average_score: String(d.average_score ?? ''),
+    score_count: Number(d.score_count ?? 0),
+    rank: Array.isArray(d.score_rank) ? d.score_rank.map((n: any) => Number(n) || 0) : [],
+    my_score: Number(d.my_score ?? -1),
+  };
+}
+
+/** 书评降级路径：从 SEO 页面收集评论链接后逐条抓取（只有首页，条数有限） */
+export async function getBookCommentsSsr(bookId: string, limit = 12): Promise<BookCommentPage> {
+  const links = await collectBookCommentLinks(bookId);
+  const comments: BookComment[] = [];
+  for (const link of links.slice(0, Math.max(0, limit))) {
+    try {
+      const c = await getBookComment(link.bookId, link.commentId);
+      if (c && c.text) comments.push(c);
+    } catch {
+      /* 单条失败不影响其它 */
+    }
+  }
+  return { comments, total: comments.length, hasMore: false, page: 1, source: 'ssr' };
+}
+
+/**
+ * 书评统一入口：App 网关优先（可翻页、明文），失败降级 SEO 页面。
+ * 首页会并行补一个评分（失败忽略，不影响书评）。
+ */
+export async function getBookCommentsWithFallback(
+  bookId: string,
+  page = 1,
+  pageCount = 20
+): Promise<BookCommentPage> {
+  const first = Math.max(1, page);
+
+  let score: BookScore | null = null;
+  try {
+    const [main, s] = await Promise.all([
+      getBookComments(bookId, first, pageCount),
+      first === 1 ? getBookScore(bookId).catch(() => null) : Promise.resolve(null),
+    ]);
+    score = s;
+    if (score) {
+      main.averageScore = score.average_score;
+      main.scoreCount = score.score_count;
+    }
+    return main;
+  } catch (e) {
+    // 翻页失败就如实报错，不要退回只有首页的 SSR 结果
+    if (first > 1) throw e;
+    const ssr = await getBookCommentsSsr(bookId, pageCount);
+    try {
+      score = await getBookScore(bookId);
+    } catch {
+      score = null;
+    }
+    if (score) {
+      ssr.averageScore = score.average_score;
+      ssr.scoreCount = score.score_count;
+    }
+    return ssr;
+  }
+}
 
 /** 从书籍页 HTML 收集 SEO 评论链接 */
 export async function collectBookCommentLinks(bookId: string): Promise<Array<{ bookId: string; commentId: string }>> {

@@ -74,6 +74,11 @@
     comments: [],
     commentsLoading: false,
     commentsError: null,
+    commentsPage: 1,
+    commentsHasMore: false,
+    commentsTotal: 0,
+    commentsScore: '',
+    commentsLoadingMore: false,
     settingsOpen: false,
     // 书架
     shelfLocal: [],
@@ -391,8 +396,16 @@
     state.searching = true;
     renderView();
     call('search', { query: state.query, page: state.searchPage, pageSize: 10 }).then(function (r) {
-      state.searchBooks = reset ? r.books : state.searchBooks.concat(r.books);
-      state.searchTotal = r.total;
+      var books = (r && r.books) || [];
+      if (reset) {
+        state.searchBooks = books;
+      } else {
+        // 兜底数据源（App 网关）相邻两页会有 1 条重叠，按 bookId 去重后再追加
+        var seen = Object.create(null);
+        state.searchBooks.forEach(function (b) { seen[b.book_id] = 1; });
+        books.forEach(function (b) { if (!seen[b.book_id]) { seen[b.book_id] = 1; state.searchBooks.push(b); } });
+      }
+      state.searchTotal = (r && r.total) || state.searchBooks.length;
       state.searchPage = reset ? 1 : state.searchPage + 1;
       state.searching = false;
       renderView();
@@ -1257,29 +1270,69 @@
   /* ---------------- 书评 ---------------- */
   // 缓存已加载过的评论（按 bookId 索引），避免重复打开时重新拉取
   var _commentsCache = Object.create(null);
-  function loadBookComments(force) {
+
+  // 把缓存里的书评状态套回 state（含分页/总数/评分）
+  function applyCommentsCache(c) {
+    state.comments = c.comments || [];
+    state.commentsPage = c.page || 1;
+    state.commentsHasMore = !!c.hasMore;
+    state.commentsTotal = c.total || 0;
+    state.commentsScore = c.score || '';
+    state.commentsLoading = false;
+    state.commentsError = c.error || null;
+  }
+
+  function commentsCacheSnapshot(error) {
+    return {
+      loading: false,
+      comments: state.comments,
+      page: state.commentsPage,
+      hasMore: state.commentsHasMore,
+      total: state.commentsTotal,
+      score: state.commentsScore,
+      error: error || null,
+    };
+  }
+
+  // more=false：加载第 1 页（命中缓存直接渲染）；more=true：加载下一页追加
+  function loadBookComments(more) {
     var bookId = state.readerBookId;
-    if (!force && _commentsCache[bookId] && !_commentsCache[bookId].loading) {
-      state.comments = _commentsCache[bookId].comments || [];
-      state.commentsLoading = false;
-      state.commentsError = _commentsCache[bookId].error || null;
+    var cached = _commentsCache[bookId];
+    if (!more && cached && !cached.loading) {
+      applyCommentsCache(cached);
       renderCommentsDrawer();
       return;
     }
-    _commentsCache[bookId] = { loading: true, comments: [], error: null };
-    state.commentsLoading = true;
+    var page = more ? (state.commentsPage || 1) + 1 : 1;
+    if (more) {
+      state.commentsLoadingMore = true;
+    } else {
+      state.commentsLoading = true;
+      state.comments = [];
+      state.commentsPage = 1;
+      state.commentsHasMore = false;
+      state.commentsTotal = 0;
+      state.commentsScore = '';
+      _commentsCache[bookId] = { loading: true, comments: [], error: null };
+    }
     state.commentsError = null;
     renderCommentsDrawer();
-    var p = call('book-comments', { bookId: bookId, limit: 12 });
-    p.then(function (r) {
-      state.comments = (r && r.comments) || [];
+    call('book-comments', { bookId: bookId, page: page, limit: 20 }).then(function (r) {
+      var list = (r && r.comments) || [];
+      state.comments = more ? state.comments.concat(list) : list;
+      state.commentsPage = (r && r.page) || page;
+      state.commentsHasMore = !!(r && r.hasMore);
+      state.commentsTotal = (r && r.total) || state.comments.length;
+      state.commentsScore = (r && r.averageScore) || state.commentsScore || '';
       state.commentsLoading = false;
-      _commentsCache[bookId] = { loading: false, comments: state.comments, error: null };
+      state.commentsLoadingMore = false;
+      _commentsCache[bookId] = commentsCacheSnapshot(null);
       renderCommentsDrawer();
     }).catch(function (e) {
       state.commentsLoading = false;
+      state.commentsLoadingMore = false;
       state.commentsError = e.message;
-      _commentsCache[bookId] = { loading: false, comments: state.comments, error: e.message };
+      _commentsCache[bookId] = commentsCacheSnapshot(e.message);
       renderCommentsDrawer();
     });
   }
@@ -1290,7 +1343,10 @@
     var drawer = el('div', 'drawer comment-drawer');
     drawer.id = 'commentsDrawer';
     var head = el('div', 'drawer-head');
-    head.appendChild(el('span', null, '书评'));
+    var headLeft = el('div', 'drawer-title');
+    headLeft.appendChild(el('span', null, state.commentsTotal ? '书评 ' + fmtCount(state.commentsTotal) : '书评'));
+    if (state.commentsScore) headLeft.appendChild(el('span', 'c-score', '★ ' + state.commentsScore));
+    head.appendChild(headLeft);
     var close = el('button', null, '✕');
     close.id = 'closeDrawer';
     head.appendChild(close);
@@ -1325,6 +1381,12 @@
         if (stat.length) item.appendChild(el('div', 'c-stat', stat.join(' · ')));
         body.appendChild(item);
       });
+      if (state.commentsHasMore) {
+        var moreBtn = el('button', 'btn ghost load-more', state.commentsLoadingMore ? '加载中…' : '加载更多');
+        moreBtn.id = 'commentsMore';
+        if (state.commentsLoadingMore) moreBtn.disabled = true;
+        body.appendChild(moreBtn);
+      }
     }
     drawer.appendChild(body);
     document.body.appendChild(drawer);
@@ -1438,6 +1500,8 @@
     if (more) { loadRank(false); return; }
     var searchMore = t.closest ? t.closest('#searchMore') : null;
     if (searchMore) { doSearch(false); return; }
+    var commentsMore = t.closest ? t.closest('#commentsMore') : null;
+    if (commentsMore) { loadBookComments(true); return; }
     var card = t.closest ? t.closest('.book-card') : null;
     if (card) {
       if (IS_SIDEBAR) { openBookInEditor(card.dataset.bookId); } else { showBookModal(card.dataset.bookId); }
@@ -1605,13 +1669,15 @@
           // 直接从缓存渲染（不重置已有评论）
           var cached = _commentsCache[state.readerBookId];
           if (cached && !cached.loading) {
-            state.comments = cached.comments || [];
-            state.commentsLoading = false;
-            state.commentsError = cached.error || null;
+            applyCommentsCache(cached);
           } else {
             state.comments = [];
             state.commentsLoading = true;
             state.commentsError = null;
+            state.commentsPage = 1;
+            state.commentsHasMore = false;
+            state.commentsTotal = 0;
+            state.commentsScore = '';
           }
           renderCommentsDrawer();
           loadBookComments(false);
